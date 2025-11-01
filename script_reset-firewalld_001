@@ -1,0 +1,18 @@
+#!/bin/bash
+# Script to clear all firewalld configurations
+# Make sure to run as root
+
+echo "Resetting firewalld to default state..."
+
+# Reset the default zone
+firewall-cmd --permanent --reset-default-zone
+
+# Reload the firewall
+firewall-cmd --complete-reload
+firewall-cmd --reload
+
+# Show final status
+echo "Current firewalld configuration:"
+firewall-cmd --list-all
+
+echo "Firewalld has been reset successfully!"
