@@ -71,8 +71,18 @@ log "Configuring iptables firewall..."
 "$IPTABLES" -A OUTPUT -p udp --dport 67:68 -j ACCEPT
 "$IPTABLES" -A INPUT -p tcp --dport 443 -j ACCEPT
 "$IPTABLES" -A OUTPUT -p tcp --dport 443 -j ACCEPT
-"$IPTABLES" -A INPUT -p tcp --dport 80 -j REJECT
-"$IPTABLES" -A OUTPUT -p tcp --dport 80 -j REJECT
+
+# Pergunta se quer bloquear HTTP
+read -rp "Deseja bloquear HTTP (porta 80)? (y/N): " BLOCK_HTTP
+if [[ "${BLOCK_HTTP}" =~ ^[yY]$ ]]; then
+    "$IPTABLES" -A INPUT -p tcp --dport 80 -j REJECT
+    "$IPTABLES" -A OUTPUT -p tcp --dport 80 -j REJECT
+    log "HTTP bloqueado."
+else
+    "$IPTABLES" -A INPUT -p tcp --dport 80 -j ACCEPT
+    "$IPTABLES" -A OUTPUT -p tcp --dport 80 -j ACCEPT
+    log "HTTP permitido."
+fi
 
 if [ -n "${NETFILTER_PERSISTENT:-}" ] && "$NETFILTER_PERSISTENT" --version >/dev/null 2>&1; then
     "$NETFILTER_PERSISTENT" save || true
@@ -145,7 +155,8 @@ EOF
 "$SYSCTL" --system >/dev/null || true
 
 log "System hardening complete!"
-echo "- Firewall: blocks all except HTTPS (443), DNS (53), DHCP (67/68) and ICMP"
+echo "- Firewall: blocks all exceto HTTPS (443), DNS (53), DHCP (67/68) e ICMP"
+echo "- HTTP: $( [[ "${BLOCK_HTTP}" =~ ^[yY]$ ]] && echo "bloqueado" || echo "permitido" )"
 echo "- SSH: disabled/removed"
 echo "- Automatic security updates enabled"
 echo "- AppArmor, auditd, and fail2ban active"
