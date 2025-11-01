@@ -71,6 +71,10 @@ iptables -A OUTPUT -p udp --dport 67:68 -j ACCEPT
 iptables -A INPUT -p tcp --dport 443 -j ACCEPT
 iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
 
+# Explicitly block HTTP (TCP 80)
+iptables -A INPUT -p tcp --dport 80 -j REJECT
+iptables -A OUTPUT -p tcp --dport 80 -j REJECT
+
 # Save rules to persist across reboot
 if command -v netfilter-persistent >/dev/null 2>&1; then
     netfilter-persistent save
