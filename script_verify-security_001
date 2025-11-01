@@ -5,6 +5,9 @@
 
 set -euo pipefail
 
+# Ensure /sbin and /usr/sbin are in PATH
+export PATH=$PATH:/sbin:/usr/sbin
+
 GREEN="\e[32m"
 RED="\e[31m"
 YELLOW="\e[33m"
@@ -21,27 +24,33 @@ check() {
 echo -e "\n🔍 Checking system security status...\n"
 
 ############################################
-# 1) Firewall check
+# 1) Firewall check (iptables)
 ############################################
-echo "🔥 Checking firewall (firewalld)..."
-if systemctl is-active --quiet firewalld; then
-  echo -e "${GREEN}[OK]${RESET} firewalld is active"
+echo "🔥 Checking iptables firewall..."
+
+if command -v iptables >/dev/null 2>&1; then
+  if sudo iptables -L -n >/dev/null 2>&1; then
+    echo -e "${GREEN}[OK]${RESET} iptables is present and accessible"
+  else
+    echo -e "${RED}[FAIL]${RESET} iptables command not accessible"
+  fi
 else
-  echo -e "${RED}[FAIL]${RESET} firewalld is NOT active"
+  echo -e "${RED}[FAIL]${RESET} iptables not installed"
 fi
 
-DEFAULT_ZONE=$(firewall-cmd --get-default-zone 2>/dev/null || echo "unknown")
-ZONE_TARGET=$(firewall-cmd --zone="$DEFAULT_ZONE" --get-target 2>/dev/null || echo "unknown")
+DEFAULT_INPUT=$(sudo iptables -L INPUT -n | grep "Chain INPUT" | awk '{print $4}')
+DEFAULT_OUTPUT=$(sudo iptables -L OUTPUT -n | grep "Chain OUTPUT" | awk '{print $4}')
+DEFAULT_FORWARD=$(sudo iptables -L FORWARD -n | grep "Chain FORWARD" | awk '{print $4}')
 
-echo "Default zone: $DEFAULT_ZONE (target: $ZONE_TARGET)"
-if [[ "$DEFAULT_ZONE" == "secure" && "$ZONE_TARGET" == "DROP" ]]; then
-  echo -e "${GREEN}[OK]${RESET} Default zone is 'secure' with target DROP"
+echo "Default policies: INPUT=$DEFAULT_INPUT OUTPUT=$DEFAULT_OUTPUT FORWARD=$DEFAULT_FORWARD"
+if [[ "$DEFAULT_INPUT" == "DROP" && "$DEFAULT_OUTPUT" == "DROP" && "$DEFAULT_FORWARD" == "DROP" ]]; then
+  echo -e "${GREEN}[OK]${RESET} Default DROP policies in place"
 else
-  echo -e "${RED}[WARN]${RESET} Default zone not properly configured"
+  echo -e "${RED}[WARN]${RESET} Default policies not DROP (less secure)"
 fi
 
-echo "Allowed services and ports in 'secure' zone:"
-firewall-cmd --zone=secure --list-all || true
+echo "Allowed ports (expected: 53, 67, 68, 443, ICMP, loopback):"
+sudo iptables -L INPUT -n -v | grep -E "dpt:(53|67|68|443)|icmp|lo" || echo "(no matching rules found)"
 
 ############################################
 # 2) AppArmor check
