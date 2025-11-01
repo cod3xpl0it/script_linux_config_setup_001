@@ -4,6 +4,7 @@
 echo "Updating the system..."
 apt update -y
 apt upgrade -y
+apt dist-upgrade -y  # Ensures dependencies are updated correctly
 
 # Install essential tools
 echo "Installing essential tools..."
@@ -14,14 +15,14 @@ apparmor-utils bash-completion curl nmap iproute2 procps
 # Configure the firewall (iptables)
 echo "Configuring the firewall..."
 
-# Clear old iptables rules
+# Flush old iptables rules
 iptables -F
 iptables -X
 iptables -t nat -F
 iptables -t mangle -F
 iptables -t raw -F
 
-# Set default policies to DROP
+# Set default policies to DROP (blocks all by default)
 iptables -P INPUT DROP
 iptables -P FORWARD DROP
 iptables -P OUTPUT DROP
@@ -34,25 +35,21 @@ iptables -A OUTPUT -o lo -j ACCEPT
 iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-# Allow ICMP (ping)
-iptables -A INPUT -p icmp -j ACCEPT
-iptables -A OUTPUT -p icmp -j ACCEPT
+# Allow ICMP (Ping) - optional, you can choose to block
+# iptables -A INPUT -p icmp -j ACCEPT
+# iptables -A OUTPUT -p icmp -j ACCEPT
 
-# Allow DNS (port 53 UDP/TCP)
+# Allow DNS (Port 53 UDP/TCP) - necessary for name resolution
 iptables -A INPUT -p udp --dport 53 -j ACCEPT
 iptables -A INPUT -p tcp --dport 53 -j ACCEPT
 iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
 iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
 
-# Allow DHCP (ports 67-68 UDP)
-iptables -A INPUT -p udp --dport 67:68 -j ACCEPT
-iptables -A OUTPUT -p udp --dport 67:68 -j ACCEPT
-
-# Allow HTTP (port 80)
+# Allow HTTP (Port 80) - if the banking app or any site needs it
 iptables -A INPUT -p tcp --dport 80 -j ACCEPT
 iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
 
-# Allow HTTPS (port 443)
+# Allow HTTPS (Port 443) - necessary for secure connections
 iptables -A INPUT -p tcp --dport 443 -j ACCEPT
 iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
 
@@ -61,14 +58,15 @@ netfilter-persistent save
 
 # Disable unnecessary services
 echo "Disabling unnecessary services..."
-systemctl disable --now avahi-daemon cups bluetooth rpcbind ssh
+systemctl disable --now avahi-daemon cups bluetooth rpcbind
 
-# Remove unnecessary packages
-apt purge -y avahi-daemon cups telnet ftp rpcbind openssh-server
+# Uninstall unnecessary packages
+echo "Removing unnecessary packages..."
+apt purge -y avahi-daemon cups telnet ftp rpcbind
 apt autoremove -y
 apt autoclean -y
 
-# Enable automatic updates
+# Configure automatic updates
 echo "Configuring automatic updates..."
 
 # Periodic update configuration
@@ -98,7 +96,7 @@ echo 'net.ipv6.conf.all.accept_source_route = 0' >> /etc/sysctl.d/99-secure-netw
 echo 'net.ipv4.tcp_syncookies = 1' >> /etc/sysctl.d/99-secure-network.conf
 echo 'net.ipv4.conf.all.rp_filter = 1' >> /etc/sysctl.d/99-secure-network.conf
 
-# Apply the changes
+# Apply sysctl changes
 sysctl --system
 
 # Reboot the system (optional)
