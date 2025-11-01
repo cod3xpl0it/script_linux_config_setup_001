@@ -1,44 +1,128 @@
 #!/usr/bin/env bash
-# verify-security.sh
+# detailed-security-check.sh
+# Run as root: sudo /bin/bash detailed-security-check.sh
 
 set -euo pipefail
 
-# Adiciona /sbin e /usr/sbin ao PATH
-export PATH=$PATH:/sbin:/usr/sbin
+IPTABLES="/sbin/iptables"
+GREEN="\033[0;32m"
+RED="\033[0;31m"
+NC="\033[0m" # No Color
 
-GREEN="\e[32m"
-RED="\e[31m"
-RESET="\e[0m"
+if [ "$(id -u)" -ne 0 ]; then
+  echo -e "${RED}Run as root: sudo $0${NC}"
+  exit 1
+fi
 
-check() {
-  if "$@" >/dev/null 2>&1; then
-    echo -e "${GREEN}[OK]${RESET} $*"
+echo "========== Detailed Security Checklist =========="
+
+############################################
+# 1) Firewall Default Policies
+############################################
+echo "---- Firewall Default Policies ----"
+for chain in INPUT FORWARD OUTPUT; do
+  policy=$($IPTABLES -L "$chain" -n | head -n1 | awk '{print $4}')
+  if [[ "$policy" == "DROP" ]]; then
+    echo -e "[${GREEN}OK${NC}] $chain policy is DROP"
   else
-    echo -e "${RED}[FAIL]${RESET} $*"
+    echo -e "[${RED}Attention${NC}] $chain policy is $policy (expected DROP)"
   fi
-}
-
-echo -e "\n🔍 Checking system security status...\n"
+done
 
 ############################################
-# Firewall check (iptables)
+# 2) Firewall Rules
 ############################################
-echo "🔥 Checking iptables firewall..."
+echo "---- Firewall Rules ----"
+RULES=(
+  "-A INPUT -p tcp --dport 443 -j ACCEPT"
+  "-A OUTPUT -p tcp --dport 443 -j ACCEPT"
+  "-A INPUT -p udp --dport 53 -j ACCEPT"
+  "-A INPUT -p tcp --dport 53 -j ACCEPT"
+  "-A OUTPUT -p udp --dport 53 -j ACCEPT"
+  "-A OUTPUT -p tcp --dport 53 -j ACCEPT"
+  "-A INPUT -p udp --dport 67:68 -j ACCEPT"
+  "-A OUTPUT -p udp --dport 67:68 -j ACCEPT"
+  "-A INPUT -p icmp -j ACCEPT"
+  "-A OUTPUT -p icmp -j ACCEPT"
+)
 
-if command -v iptables >/dev/null 2>&1; then
-    echo -e "${GREEN}[OK]${RESET} iptables found at $(command -v iptables)"
+for rule in "${RULES[@]}"; do
+  if $IPTABLES -S | grep -F -- "$rule" >/dev/null 2>&1; then
+    echo -e "[${GREEN}OK${NC}] Rule exists: $rule"
+  else
+    echo -e "[${RED}Attention${NC}] Rule missing: $rule"
+  fi
+done
+
+############################################
+# 3) Services individually
+############################################
+echo "---- Services ----"
+SERVICES=("avahi-daemon" "cups" "bluetooth" "rpcbind" "ssh")
+for svc in "${SERVICES[@]}"; do
+  if ! systemctl is-enabled "$svc" >/dev/null 2>&1; then
+    echo -e "[${GREEN}OK${NC}] $svc disabled"
+  else
+    echo -e "[${RED}Attention${NC}] $svc still enabled"
+  fi
+  if ! systemctl is-active "$svc" >/dev/null 2>&1; then
+    echo -e "[${GREEN}OK${NC}] $svc inactive"
+  else
+    echo -e "[${RED}Attention${NC}] $svc still active"
+  fi
+done
+
+############################################
+# 4) Security Services
+############################################
+echo "---- Security Services ----"
+SEC_SERVICES=("apparmor" "auditd" "fail2ban")
+for svc in "${SEC_SERVICES[@]}"; do
+  if systemctl is-enabled "$svc" >/dev/null 2>&1; then
+    echo -e "[${GREEN}OK${NC}] $svc enabled"
+  else
+    echo -e "[${RED}Attention${NC}] $svc not enabled"
+  fi
+  if systemctl is-active "$svc" >/dev/null 2>&1; then
+    echo -e "[${GREEN}OK${NC}] $svc active"
+  else
+    echo -e "[${RED}Attention${NC}] $svc inactive"
+  fi
+done
+
+############################################
+# 5) Kernel Hardening
+############################################
+echo "---- Kernel Hardening ----"
+SYSCTL_FILE="/etc/sysctl.d/99-secure-network.conf"
+if [ -f "$SYSCTL_FILE" ]; then
+  while IFS= read -r line; do
+    [[ "$line" =~ ^# ]] && continue
+    [[ -z "$line" ]] && continue
+    key=$(echo "$line" | cut -d= -f1 | xargs)
+    expected=$(echo "$line" | cut -d= -f2 | xargs)
+    current=$(sysctl -n "$key" 2>/dev/null || echo "undefined")
+    if [[ "$current" == "$expected" ]]; then
+      echo -e "[${GREEN}OK${NC}] $key = $current"
+    else
+      echo -e "[${RED}Attention${NC}] $key = $current (expected $expected)"
+    fi
+  done < "$SYSCTL_FILE"
 else
-    echo -e "${RED}[FAIL]${RESET} iptables not found"
+  echo -e "[${RED}Attention${NC}] Kernel hardening file $SYSCTL_FILE not found"
 fi
 
-# Não precisa usar sudo, já é root
-DEFAULT_INPUT=$(iptables -L INPUT -n | grep "Chain INPUT" | awk '{print $4}')
-DEFAULT_OUTPUT=$(iptables -L OUTPUT -n | grep "Chain OUTPUT" | awk '{print $4}')
-DEFAULT_FORWARD=$(iptables -L FORWARD -n | grep "Chain FORWARD" | awk '{print $4}')
-
-echo "Default policies: INPUT=$DEFAULT_INPUT OUTPUT=$DEFAULT_OUTPUT FORWARD=$DEFAULT_FORWARD"
-if [[ "$DEFAULT_INPUT" == "DROP" && "$DEFAULT_OUTPUT" == "DROP" && "$DEFAULT_FORWARD" == "DROP" ]]; then
-  echo -e "${GREEN}[OK]${RESET} Default DROP policies in place"
+############################################
+# 6) Automatic Updates
+############################################
+echo "---- Automatic Updates ----"
+AUTO_UPDATES_FILE="/etc/apt/apt.conf.d/20auto-upgrades"
+if [ -f "$AUTO_UPDATES_FILE" ]; then
+  grep -q 'Unattended-Upgrade "1"' "$AUTO_UPDATES_FILE" && \
+    echo -e "[${GREEN}OK${NC}] Automatic security updates enabled" || \
+    echo -e "[${RED}Attention${NC}] Automatic security updates not enabled"
 else
-  echo -e "${RED}[WARN]${RESET} Default policies not DROP (less secure)"
+  echo -e "[${RED}Attention${NC}] File $AUTO_UPDATES_FILE not found"
 fi
+
+echo "=============================================="
