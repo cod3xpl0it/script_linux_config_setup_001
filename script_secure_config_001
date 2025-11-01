@@ -62,6 +62,7 @@ systemctl disable --now avahi-daemon cups bluetooth rpcbind
 
 # Uninstall unnecessary packages
 echo "Removing unnecessary packages..."
+apt remove -y avahi-daemon cups telnet ftp rpcbind
 apt purge -y avahi-daemon cups telnet ftp rpcbind
 apt autoremove -y
 apt autoclean -y
