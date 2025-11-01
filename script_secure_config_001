@@ -21,7 +21,7 @@ log "Updating system and installing security tools..."
 export DEBIAN_FRONTEND=noninteractive
 apt update -y
 apt upgrade -y
-apt install -y firewalld unattended-upgrades apt-listchanges auditd fail2ban apparmor apparmor-utils bash-completion curl
+apt install -y firewalld unattended-upgrades apt-listchanges auditd fail2ban apparmor apparmor-utils bash-completion curl nmap
 
 ############################################
 # 2) Configure firewall (firewalld)
