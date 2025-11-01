@@ -28,6 +28,7 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
+# Detectar comandos essenciais
 IPTABLES=$(find_cmd iptables) || { echo "iptables not found"; exit 1; }
 NETFILTER_PERSISTENT=$(find_cmd netfilter-persistent) || true
 APT=$(find_cmd apt) || { echo "apt not found"; exit 1; }
@@ -38,6 +39,9 @@ CURL=$(find_cmd curl) || true
 NMAP=$(find_cmd nmap) || true
 
 export PATH=/sbin:/usr/sbin:$PATH
+
+# Pergunta antes de tudo sobre HTTP
+read -rp "Deseja bloquear HTTP (porta 80)? (y/N): " BLOCK_HTTP
 
 log "Updating system and installing security tools..."
 export DEBIAN_FRONTEND=noninteractive
@@ -72,8 +76,7 @@ log "Configuring iptables firewall..."
 "$IPTABLES" -A INPUT -p tcp --dport 443 -j ACCEPT
 "$IPTABLES" -A OUTPUT -p tcp --dport 443 -j ACCEPT
 
-# Pergunta se quer bloquear HTTP
-read -rp "Deseja bloquear HTTP (porta 80)? (y/N): " BLOCK_HTTP
+# Aplicar regra de HTTP com base na decisão do usuário
 if [[ "${BLOCK_HTTP}" =~ ^[yY]$ ]]; then
     "$IPTABLES" -A INPUT -p tcp --dport 80 -j REJECT
     "$IPTABLES" -A OUTPUT -p tcp --dport 80 -j REJECT
