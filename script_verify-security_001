@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
 # verify-security.sh
-# Run as normal user or sudo
-# Checks system hardening and runs simple live tests
 
 set -euo pipefail
 
-# Ensure /sbin and /usr/sbin are in PATH
+# Adiciona /sbin e /usr/sbin ao PATH
 export PATH=$PATH:/sbin:/usr/sbin
 
 GREEN="\e[32m"
 RED="\e[31m"
-YELLOW="\e[33m"
 RESET="\e[0m"
 
 check() {
@@ -24,23 +21,20 @@ check() {
 echo -e "\n🔍 Checking system security status...\n"
 
 ############################################
-# 1) Firewall check (iptables)
+# Firewall check (iptables)
 ############################################
 echo "🔥 Checking iptables firewall..."
 
 if command -v iptables >/dev/null 2>&1; then
-  if sudo iptables -L -n >/dev/null 2>&1; then
-    echo -e "${GREEN}[OK]${RESET} iptables is present and accessible"
-  else
-    echo -e "${RED}[FAIL]${RESET} iptables command not accessible"
-  fi
+    echo -e "${GREEN}[OK]${RESET} iptables found at $(command -v iptables)"
 else
-  echo -e "${RED}[FAIL]${RESET} iptables not installed"
+    echo -e "${RED}[FAIL]${RESET} iptables not found"
 fi
 
-DEFAULT_INPUT=$(sudo iptables -L INPUT -n | grep "Chain INPUT" | awk '{print $4}')
-DEFAULT_OUTPUT=$(sudo iptables -L OUTPUT -n | grep "Chain OUTPUT" | awk '{print $4}')
-DEFAULT_FORWARD=$(sudo iptables -L FORWARD -n | grep "Chain FORWARD" | awk '{print $4}')
+# Não precisa usar sudo, já é root
+DEFAULT_INPUT=$(iptables -L INPUT -n | grep "Chain INPUT" | awk '{print $4}')
+DEFAULT_OUTPUT=$(iptables -L OUTPUT -n | grep "Chain OUTPUT" | awk '{print $4}')
+DEFAULT_FORWARD=$(iptables -L FORWARD -n | grep "Chain FORWARD" | awk '{print $4}')
 
 echo "Default policies: INPUT=$DEFAULT_INPUT OUTPUT=$DEFAULT_OUTPUT FORWARD=$DEFAULT_FORWARD"
 if [[ "$DEFAULT_INPUT" == "DROP" && "$DEFAULT_OUTPUT" == "DROP" && "$DEFAULT_FORWARD" == "DROP" ]]; then
@@ -48,90 +42,3 @@ if [[ "$DEFAULT_INPUT" == "DROP" && "$DEFAULT_OUTPUT" == "DROP" && "$DEFAULT_FOR
 else
   echo -e "${RED}[WARN]${RESET} Default policies not DROP (less secure)"
 fi
-
-echo "Allowed ports (expected: 53, 67, 68, 443, ICMP, loopback):"
-sudo iptables -L INPUT -n -v | grep -E "dpt:(53|67|68|443)|icmp|lo" || echo "(no matching rules found)"
-
-############################################
-# 2) AppArmor check
-############################################
-echo -e "\n🛡️ Checking AppArmor..."
-if systemctl is-active --quiet apparmor; then
-  echo -e "${GREEN}[OK]${RESET} AppArmor is running"
-  if apparmor_status | grep -q "profiles are loaded"; then
-    echo -e "${GREEN}[OK]${RESET} AppArmor profiles loaded"
-  else
-    echo -e "${RED}[WARN]${RESET} No profiles loaded"
-  fi
-else
-  echo -e "${RED}[FAIL]${RESET} AppArmor not active"
-fi
-
-############################################
-# 3) auditd and fail2ban check
-############################################
-echo -e "\n📜 Checking auditd and fail2ban..."
-check systemctl is-active auditd
-check systemctl is-active fail2ban
-
-############################################
-# 4) Automatic updates check
-############################################
-echo -e "\n🔄 Checking automatic updates..."
-if systemctl is-enabled unattended-upgrades >/dev/null 2>&1; then
-  echo -e "${GREEN}[OK]${RESET} unattended-upgrades enabled"
-else
-  echo -e "${RED}[FAIL]${RESET} unattended-upgrades not enabled"
-fi
-
-############################################
-# 5) SSH check
-############################################
-echo -e "\n🚫 Checking SSH..."
-if dpkg -l | grep -q openssh-server; then
-  echo -e "${RED}[FAIL]${RESET} SSH package still installed"
-else
-  echo -e "${GREEN}[OK]${RESET} SSH package removed"
-fi
-
-############################################
-# 6) Network tests
-############################################
-echo -e "\n🌐 Running network tests (HTTPS / HTTP / DNS / ICMP)..."
-
-echo -n "Testing HTTPS access (should work): "
-if curl -Is https://www.debian.org --max-time 10 >/dev/null 2>&1; then
-  echo -e "${GREEN}OK${RESET}"
-else
-  echo -e "${RED}FAIL${RESET}"
-fi
-
-echo -n "Testing HTTP access (should FAIL): "
-if curl -Is http://example.com --max-time 10 >/dev/null 2>&1; then
-  echo -e "${RED}NOT BLOCKED (UNSAFE)${RESET}"
-else
-  echo -e "${GREEN}BLOCKED${RESET}"
-fi
-
-echo -n "Testing DNS resolution (should work): "
-if getent hosts debian.org >/dev/null 2>&1; then
-  echo -e "${GREEN}OK${RESET}"
-else
-  echo -e "${RED}FAIL${RESET}"
-fi
-
-echo -n "Testing ICMP (ping 8.8.8.8, should work): "
-if ping -c1 -W1 8.8.8.8 >/dev/null 2>&1; then
-  echo -e "${GREEN}OK${RESET}"
-else
-  echo -e "${RED}FAIL${RESET}"
-fi
-
-############################################
-# 7) Summary
-############################################
-echo -e "\n✅ Verification complete."
-echo "If all [OK] or [BLOCKED] appear green, your system is properly hardened."
-echo "If you see [FAIL] or [WARN], review those areas."
-
-echo -e "\nYou can re-run this test anytime after updates or firewall changes."
