@@ -24,7 +24,7 @@ apt upgrade -y
 apt install -y --no-install-recommends firewalld unattended-upgrades apt-listchanges auditd fail2ban apparmor apparmor-utils bash-completion curl nmap iproute2 procps
 
 ############################################
-# 2) Configure firewall (firewalld) - block all except HTTPS/DNS/DHCP/ICMP
+# 2) Configure firewall (firewalld)
 ############################################
 log "Configuring firewalld..."
 systemctl enable --now firewalld
@@ -34,7 +34,6 @@ if ! firewall-cmd --get-zones | grep -qw secure; then
     firewall-cmd --permanent --new-zone=secure
 fi
 
-# Reload firewalld to recognize new zone
 firewall-cmd --reload
 
 log "Clearing existing services/ports/rules from 'secure' zone..."
@@ -71,32 +70,21 @@ firewall-cmd --permanent --zone=secure --add-rich-rule='rule protocol value="icm
 firewall-cmd --permanent --zone=secure --remove-service=ssh || true
 firewall-cmd --permanent --zone=secure --remove-port=22/tcp || true
 
-# Assign all non-loopback interfaces to 'secure' zone
-for iface in $(ip -o link show | awk -F': ' '{print $2}' | grep -v lo); do
+# Assign all active, non-loopback interfaces to 'secure' zone
+for iface in $(ip -o link show up | awk -F': ' '{print $2}' | grep -v lo); do
   firewall-cmd --permanent --zone=secure --add-interface="$iface" || true
 done
 
-# Set default zone if not already 'secure'
-CURRENT_ZONE=$(firewall-cmd --get-default-zone)
-if [ "$CURRENT_ZONE" != "secure" ]; then
-  firewall-cmd --set-default-zone=secure
-fi
-CURRENT_PERM_ZONE=$(firewall-cmd --permanent --get-default-zone)
-if [ "$CURRENT_PERM_ZONE" != "secure" ]; then
-  firewall-cmd --permanent --set-default-zone=secure
-fi
+# Set default zone to 'secure'
+firewall-cmd --set-default-zone=secure
+firewall-cmd --permanent --set-default-zone=secure
 
-# Reload firewall and show status
 log "Reloading firewalld..."
 firewall-cmd --reload
 log "Active zones:"
 firewall-cmd --get-active-zones
-# Reload firewalld to recognize new zone
-firewall-cmd --reload
 log "Secure zone rules:"
 firewall-cmd --zone=secure --list-all
-# Reload firewalld to recognize new zone
-firewall-cmd --reload
 
 ############################################
 # 3) Disable and remove unneeded services
