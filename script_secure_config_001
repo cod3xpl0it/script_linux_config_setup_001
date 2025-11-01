@@ -36,18 +36,18 @@ firewall-cmd --set-default-zone=drop
 # Allow loopback (local system)
 firewall-cmd --permanent --zone=trusted --add-interface=lo
 
-# Allow only outgoing HTTPS and DNS using services (corrected)
-log "Allowing only HTTPS, DNS, and DHCP..."
+# Allow only outgoing HTTPS, DNS, DHCP and ICMP (corrected)
+log "Allowing only HTTPS, DNS, DHCP, and ICMP..."
 # HTTPS
 firewall-cmd --permanent --add-service=https
 # DNS
 firewall-cmd --permanent --add-service=dns
-# DHCP (UDP 67/68)
-firewall-cmd --permanent --add-rich-rule='rule family="ipv4" destination port port="67-68" protocol="udp" accept'
-firewall-cmd --permanent --add-rich-rule='rule family="ipv6" destination port port="67-68" protocol="udp" accept'
-# Allow ICMP (ping)
+# DHCP
+firewall-cmd --permanent --zone=trusted --add-service=dhcp
+# ICMP (ping)
 firewall-cmd --permanent --add-rich-rule='rule protocol value="icmp" accept'
 
+# Reload firewall to apply changes
 firewall-cmd --reload
 firewall-cmd --list-all
 
@@ -128,7 +128,7 @@ sysctl --system >/dev/null || true
 # 8) Done
 ############################################
 log "System hardening complete!"
-echo "- Firewall blocks all except HTTPS (443), DNS (53), and DHCP (67/68)"
+echo "- Firewall blocks all except HTTPS (443), DNS (53), DHCP (67/68) and ICMP"
 echo "- SSH disabled and removed"
 echo "- Automatic security updates enabled"
 echo "- AppArmor, auditd, and fail2ban active"
