@@ -21,36 +21,41 @@ log "Updating system and installing security tools..."
 export DEBIAN_FRONTEND=noninteractive
 apt update -y
 apt upgrade -y
-
-apt install -y firewalld unattended-upgrades apt-listchanges auditd fail2ban apparmor apparmor-utils bash-completion
+apt install -y firewalld unattended-upgrades apt-listchanges auditd fail2ban apparmor apparmor-utils bash-completion curl
 
 ############################################
 # 2) Configure firewall (firewalld)
 ############################################
-log "Enabling firewalld..."
+log "Configuring firewalld..."
+
 systemctl enable --now firewalld
 
-log "Setting default zone to DROP (block everything by default)..."
-firewall-cmd --set-default-zone=drop >/dev/null 2>&1 || true
+# Create a clean custom zone
+if ! firewall-cmd --get-zones | grep -qw secure; then
+  firewall-cmd --permanent --new-zone=secure
+fi
 
-# Allow loopback (local system)
-firewall-cmd --permanent --zone=trusted --add-interface=lo >/dev/null 2>&1 || true
+log "Setting default zone to 'secure'..."
+firewall-cmd --set-default-zone=secure
 
-# Allow only outgoing HTTPS, DNS, DHCP and ICMP (corrected)
+# Block everything by default in this zone
+firewall-cmd --permanent --zone=secure --set-target=DROP
+
+# Allow loopback (local)
+firewall-cmd --permanent --zone=secure --add-interface=lo
+
+# Allow only required traffic
 log "Allowing only HTTPS, DNS, DHCP, and ICMP..."
-# HTTPS (allow outgoing only)
-firewall-cmd --permanent --add-service=https >/dev/null 2>&1 || true
-firewall-cmd --permanent --add-rich-rule='rule family="ipv4" port port="443" protocol="tcp" direction="out" accept' >/dev/null 2>&1 || true
-# DNS
-firewall-cmd --permanent --add-service=dns >/dev/null 2>&1 || true
-# DHCP
-firewall-cmd --permanent --zone=trusted --add-service=dhcp >/dev/null 2>&1 || true
-# ICMP (ping)
-firewall-cmd --permanent --add-rich-rule='rule protocol value="icmp" accept' >/dev/null 2>&1 || true
+firewall-cmd --permanent --zone=secure --add-service=https
+firewall-cmd --permanent --zone=secure --add-service=dns
+firewall-cmd --permanent --zone=secure --add-service=dhcp
+firewall-cmd --permanent --zone=secure --add-icmp-block-inversion=no
+firewall-cmd --permanent --zone=secure --add-rich-rule='rule protocol value="icmp" accept'
 
-# Reload firewall to apply changes
+# Reload and show status
 firewall-cmd --reload
-firewall-cmd --list-all
+firewall-cmd --get-active-zones
+firewall-cmd --zone=secure --list-all
 
 ############################################
 # 3) Disable and remove unneeded services
@@ -129,7 +134,7 @@ sysctl --system >/dev/null || true
 # 8) Done
 ############################################
 log "System hardening complete!"
-echo "- Firewall blocks all except HTTPS (443 outbound), DNS (53), DHCP (67/68) and ICMP"
+echo "- Firewall blocks all except HTTPS (443), DNS (53), DHCP (67/68) and ICMP"
 echo "- SSH disabled and removed"
 echo "- Automatic security updates enabled"
 echo "- AppArmor, auditd, and fail2ban active"
