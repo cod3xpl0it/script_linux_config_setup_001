@@ -1,33 +1,72 @@
 #!/bin/bash
-# Reset firewalld to its factory default state
+# Reset firewalld and iptables to factory default state
 # Must be run as root
 
-echo "Resetting firewalld to factory defaults..."
+echo "======================================="
+echo " Resetting firewalld and iptables..."
+echo "======================================="
 
-# Check if firewalld is installed
-if ! command -v firewall-cmd &> /dev/null; then
-  echo "Error: firewalld is not installed on this system."
-  exit 1
+#---------------------------------------
+# Check firewalld
+#---------------------------------------
+if command -v firewall-cmd &> /dev/null; then
+  echo "Stopping firewalld..."
+  systemctl stop firewalld
+
+  echo "Removing firewalld configuration files..."
+  rm -rf /etc/firewalld
+
+  echo "Starting firewalld..."
+  systemctl start firewalld
+
+  echo "Reloading firewalld..."
+  firewall-cmd --reload > /dev/null 2>&1
+
+  echo "Current firewalld configuration:"
+  firewall-cmd --list-all
+else
+  echo "Warning: firewalld not found, skipping..."
 fi
 
-# Stop firewalld service
-echo "Stopping firewalld..."
-systemctl stop firewalld
+#---------------------------------------
+# Reset iptables (IPv4)
+#---------------------------------------
+if command -v iptables &> /dev/null; then
+  echo "Resetting iptables rules (IPv4)..."
+  iptables -F
+  iptables -X
+  iptables -Z
+  iptables -P INPUT ACCEPT
+  iptables -P FORWARD ACCEPT
+  iptables -P OUTPUT ACCEPT
+else
+  echo "Warning: iptables not found, skipping..."
+fi
 
-# Remove all persistent configurations
-echo "Removing firewalld configuration files..."
-rm -rf /etc/firewalld
+#---------------------------------------
+# Reset ip6tables (IPv6)
+#---------------------------------------
+if command -v ip6tables &> /dev/null; then
+  echo "Resetting ip6tables rules (IPv6)..."
+  ip6tables -F
+  ip6tables -X
+  ip6tables -Z
+  ip6tables -P INPUT ACCEPT
+  ip6tables -P FORWARD ACCEPT
+  ip6tables -P OUTPUT ACCEPT
+else
+  echo "Warning: ip6tables not found, skipping..."
+fi
 
-# Start firewalld again
-echo "Starting firewalld..."
-systemctl start firewalld
+#---------------------------------------
+# Optional: Save the reset state (if supported)
+#---------------------------------------
+if command -v netfilter-persistent &> /dev/null; then
+  echo "Saving current firewall state..."
+  netfilter-persistent save
+fi
 
-# Reload configuration
-echo "Reloading firewalld..."
-firewall-cmd --reload > /dev/null 2>&1
-
-# Display the default configuration
-echo "Current firewalld configuration:"
-firewall-cmd --list-all
-
-echo "Firewalld has been successfully reset to default settings!"
+echo "======================================="
+echo " Firewall reset complete!"
+echo " Both firewalld and iptables restored to defaults."
+echo "======================================="
