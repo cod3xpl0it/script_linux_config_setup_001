@@ -38,8 +38,9 @@ firewall-cmd --permanent --zone=trusted --add-interface=lo
 
 # Allow only outgoing HTTPS, DNS, DHCP and ICMP (corrected)
 log "Allowing only HTTPS, DNS, DHCP, and ICMP..."
-# HTTPS
+# HTTPS (allow outgoing)
 firewall-cmd --permanent --add-service=https
+firewall-cmd --permanent --add-rich-rule='rule family="ipv4" destination port port="443" protocol="tcp" accept'
 # DNS
 firewall-cmd --permanent --add-service=dns
 # DHCP
