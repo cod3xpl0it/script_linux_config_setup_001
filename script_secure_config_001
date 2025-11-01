@@ -88,8 +88,12 @@ log "Reloading firewalld..."
 firewall-cmd --reload
 log "Active zones:"
 firewall-cmd --get-active-zones
+# Reload firewalld to recognize new zone
+firewall-cmd --reload
 log "Secure zone rules:"
 firewall-cmd --zone=secure --list-all
+# Reload firewalld to recognize new zone
+firewall-cmd --reload
 
 ############################################
 # 3) Disable and remove unneeded services
