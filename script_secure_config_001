@@ -1,14 +1,29 @@
 #!/usr/bin/env bash
-# secure-minimal-iptables.sh
-# Run as root: sudo ./secure-minimal-iptables.sh
-# Goal: make Debian minimal and secure
-# Blocks all traffic except HTTPS, DNS, DHCP, and ICMP
-# Enables AppArmor, automatic updates, auditd, fail2ban, and removes weak services
+# secure-minimal-iptables-forcando-sbin.sh
+# Run as root: sudo bash $0
+# Version of your script that *prefers* executing commands from /sbin and /usr/sbin
+# (searches /sbin first, then /usr/sbin, and falls back to PATH)
 
 set -euo pipefail
 
-# Ensure /sbin and /usr/sbin are in PATH (needed for iptables and system tools)
-export PATH=$PATH:/sbin:/usr/sbin
+# Utility function: finds the executable preferring /sbin, then /usr/sbin, then PATH
+find_cmd() {
+  local cmd="$1"
+  if [ -x "/sbin/$cmd" ]; then
+    printf "%s" "/sbin/$cmd"
+    return 0
+  fi
+  if [ -x "/usr/sbin/$cmd" ]; then
+    printf "%s" "/usr/sbin/$cmd"
+    return 0
+  fi
+  # fallback to PATH (if binary is in /usr/bin, /bin, etc.)
+  if command -v "$cmd" >/dev/null 2>&1; then
+    command -v "$cmd"
+    return 0
+  fi
+  return 1
+}
 
 log() { echo -e "[*] $*"; }
 
@@ -17,14 +32,31 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
+# Resolve commands used in the script (prefer /sbin and /usr/sbin)
+IPTABLES=$(find_cmd iptables) || { echo "iptables not found"; exit 1; }
+NETFILTER_PERSISTENT=$(find_cmd netfilter-persistent) || true
+APT=$(find_cmd apt) || { echo "apt not found"; exit 1; }
+SYSTEMCTL=$(find_cmd systemctl) || { echo "systemctl not found"; exit 1; }
+SYSCTL=$(find_cmd sysctl) || { echo "sysctl not found"; exit 1; }
+REBOOT_CMD=$(find_cmd reboot) || true
+
+# Other commands that may reside in /usr/bin (resolved via find_cmd)
+CURL=$(find_cmd curl) || true
+NMAP=$(find_cmd nmap) || true
+
+# Ensure /sbin and /usr/sbin in PATH as preference (but critical commands use resolved paths)
+export PATH=/sbin:/usr/sbin:$PATH
+
 ############################################
 # 1) Update and install needed packages
 ############################################
 log "Updating system and installing security tools..."
 export DEBIAN_FRONTEND=noninteractive
-apt update -y
-apt upgrade -y
-apt install -y --no-install-recommends unattended-upgrades apt-listchanges auditd fail2ban apparmor apparmor-utils bash-completion curl nmap iproute2 procps iptables
+
+# use $APT variable (preferably /sbin/apt if exists, else /usr/bin/apt)
+"$APT" update -y
+"$APT" upgrade -y
+"$APT" install -y --no-install-recommends unattended-upgrades apt-listchanges auditd fail2ban apparmor apparmor-utils bash-completion curl nmap iproute2 procps iptables
 
 ############################################
 # 2) Configure iptables firewall
@@ -32,74 +64,79 @@ apt install -y --no-install-recommends unattended-upgrades apt-listchanges audit
 log "Configuring iptables firewall..."
 
 # Flush existing rules
-iptables -F
-iptables -X
-iptables -t nat -F
-iptables -t nat -X
-iptables -t mangle -F
-iptables -t mangle -X
-iptables -t raw -F
-iptables -t raw -X
+"$IPTABLES" -F
+"$IPTABLES" -X
+"$IPTABLES" -t nat -F
+"$IPTABLES" -t nat -X
+"$IPTABLES" -t mangle -F
+"$IPTABLES" -t mangle -X
+"$IPTABLES" -t raw -F
+"$IPTABLES" -t raw -X
 
 # Set default policies to DROP
-iptables -P INPUT DROP
-iptables -P FORWARD DROP
-iptables -P OUTPUT DROP
+"$IPTABLES" -P INPUT DROP
+"$IPTABLES" -P FORWARD DROP
+"$IPTABLES" -P OUTPUT DROP
 
 # Allow loopback
-iptables -A INPUT -i lo -j ACCEPT
-iptables -A OUTPUT -o lo -j ACCEPT
+"$IPTABLES" -A INPUT -i lo -j ACCEPT
+"$IPTABLES" -A OUTPUT -o lo -j ACCEPT
 
 # Allow established and related connections
-iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+"$IPTABLES" -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+"$IPTABLES" -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
 # Allow incoming ICMP
-iptables -A INPUT -p icmp -j ACCEPT
-iptables -A OUTPUT -p icmp -j ACCEPT
+"$IPTABLES" -A INPUT -p icmp -j ACCEPT
+"$IPTABLES" -A OUTPUT -p icmp -j ACCEPT
 
 # Allow incoming DNS (TCP/UDP 53)
-iptables -A INPUT -p udp --dport 53 -j ACCEPT
-iptables -A INPUT -p tcp --dport 53 -j ACCEPT
+"$IPTABLES" -A INPUT -p udp --dport 53 -j ACCEPT
+"$IPTABLES" -A INPUT -p tcp --dport 53 -j ACCEPT
 
 # Allow outgoing DNS
-iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
-iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
+"$IPTABLES" -A OUTPUT -p udp --dport 53 -j ACCEPT
+"$IPTABLES" -A OUTPUT -p tcp --dport 53 -j ACCEPT
 
 # Allow incoming DHCP (UDP 67:68)
-iptables -A INPUT -p udp --dport 67:68 -j ACCEPT
-iptables -A OUTPUT -p udp --dport 67:68 -j ACCEPT
+"$IPTABLES" -A INPUT -p udp --dport 67:68 -j ACCEPT
+"$IPTABLES" -A OUTPUT -p udp --dport 67:68 -j ACCEPT
 
 # Allow HTTPS (TCP 443) both ways
-iptables -A INPUT -p tcp --dport 443 -j ACCEPT
-iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+"$IPTABLES" -A INPUT -p tcp --dport 443 -j ACCEPT
+"$IPTABLES" -A OUTPUT -p tcp --dport 443 -j ACCEPT
 
 # Explicitly block HTTP (TCP 80)
-iptables -A INPUT -p tcp --dport 80 -j REJECT
-iptables -A OUTPUT -p tcp --dport 80 -j REJECT
+"$IPTABLES" -A INPUT -p tcp --dport 80 -j REJECT
+"$IPTABLES" -A OUTPUT -p tcp --dport 80 -j REJECT
 
 # Save rules to persist across reboot
-if command -v netfilter-persistent >/dev/null 2>&1; then
-    netfilter-persistent save
+if [ -n "${NETFILTER_PERSISTENT:-}" ] && "$NETFILTER_PERSISTENT" --version >/dev/null 2>&1; then
+    "$NETFILTER_PERSISTENT" save || true
 else
-    apt install -y netfilter-persistent
-    netfilter-persistent save
+    # install netfilter-persistent via apt (uses $APT)
+    "$APT" install -y netfilter-persistent
+    NETFILTER_PERSISTENT=$(find_cmd netfilter-persistent) || true
+    if [ -n "${NETFILTER_PERSISTENT:-}" ]; then
+        "$NETFILTER_PERSISTENT" save || true
+    fi
 fi
 
 log "iptables rules applied:"
-iptables -L -v --line-numbers
+"$IPTABLES" -L -v --line-numbers
 
 ############################################
 # 3) Disable and remove unneeded services
 ############################################
 log "Disabling and removing unnecessary services..."
 for svc in avahi-daemon cups bluetooth rpcbind ssh; do
-  systemctl disable --now "$svc" 2>/dev/null || true
+  "$SYSTEMCTL" disable --now "$svc" 2>/dev/null || true
 done
 
-apt purge -y avahi-daemon cups telnet ftp rpcbind openssh-server || true
-apt autoremove -y
-apt autoclean -y
+# Use apt to purge unnecessary packages
+"$APT" purge -y avahi-daemon cups telnet ftp rpcbind openssh-server || true
+"$APT" autoremove -y
+"$APT" autoclean -y
 
 ############################################
 # 4) Enable automatic security updates
@@ -110,6 +147,7 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 EOF
 
+# attempt to get data from /etc/os-release
 distro_id="Debian"
 distro_codename="stable"
 if [ -f /etc/os-release ]; then
@@ -126,19 +164,19 @@ Unattended-Upgrade::Automatic-Reboot "false";
 Unattended-Upgrade::Remove-Unused-Dependencies "true";
 EOF
 
-systemctl enable --now unattended-upgrades || true
+"$SYSTEMCTL" enable --now unattended-upgrades || true
 
 ############################################
 # 5) Enable AppArmor, auditd, and fail2ban
 ############################################
 log "Enabling AppArmor..."
-systemctl enable --now apparmor || true
+"$SYSTEMCTL" enable --now apparmor || true
 
 log "Enabling auditd..."
-systemctl enable --now auditd || true
+"$SYSTEMCTL" enable --now auditd || true
 
 log "Enabling fail2ban..."
-systemctl enable --now fail2ban || true
+"$SYSTEMCTL" enable --now fail2ban || true
 
 cat >/etc/fail2ban/jail.d/local.conf <<'EOF'
 [DEFAULT]
@@ -147,7 +185,7 @@ findtime = 600
 maxretry = 5
 EOF
 
-systemctl restart fail2ban || true
+"$SYSTEMCTL" restart fail2ban || true
 
 ############################################
 # 6) Secure network kernel settings
@@ -163,7 +201,8 @@ net.ipv6.conf.all.accept_source_route = 0
 net.ipv4.tcp_syncookies = 1
 net.ipv4.conf.all.rp_filter = 1
 EOF
-sysctl --system >/dev/null || true
+
+"$SYSCTL" --system >/dev/null || true
 
 ############################################
 # 7) Done
@@ -176,8 +215,12 @@ echo "- AppArmor, auditd, and fail2ban active"
 echo "- Extra services disabled"
 
 read -rp "Reboot now? (y/N): " REBOOT
-if [[ "$REBOOT" =~ ^[yY]$ ]]; then
-  reboot
+if [[ "${REBOOT}" =~ ^[yY]$ ]]; then
+  if [ -n "${REBOOT_CMD:-}" ]; then
+    "$REBOOT_CMD"
+  else
+    "$SYSTEMCTL" reboot || true
+  fi
 else
   echo "Reboot later to apply all changes fully."
 fi
