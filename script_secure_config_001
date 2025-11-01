@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# secure-minimal.sh
-# Run as root: sudo ./secure-minimal.sh
+# secure-minimal-iptables.sh
+# Run as root: sudo ./secure-minimal-iptables.sh
 # Goal: make Debian minimal and secure
 # Blocks all traffic except HTTPS, DNS, DHCP, and ICMP
 # Enables AppArmor, automatic updates, auditd, fail2ban, and removes weak services
@@ -21,70 +21,66 @@ log "Updating system and installing security tools..."
 export DEBIAN_FRONTEND=noninteractive
 apt update -y
 apt upgrade -y
-apt install -y --no-install-recommends firewalld unattended-upgrades apt-listchanges auditd fail2ban apparmor apparmor-utils bash-completion curl nmap iproute2 procps
+apt install -y --no-install-recommends unattended-upgrades apt-listchanges auditd fail2ban apparmor apparmor-utils bash-completion curl nmap iproute2 procps iptables
 
 ############################################
-# 2) Configure firewall (firewalld)
+# 2) Configure iptables firewall
 ############################################
-log "Configuring firewalld..."
-systemctl enable --now firewalld
+log "Configuring iptables firewall..."
 
-# Create custom zone 'secure' if it doesn't exist
-if ! firewall-cmd --get-zones | grep -qw secure; then
-    firewall-cmd --permanent --new-zone=secure
-fi
+# Flush existing rules
+iptables -F
+iptables -X
+iptables -t nat -F
+iptables -t nat -X
+iptables -t mangle -F
+iptables -t mangle -X
+iptables -t raw -F
+iptables -t raw -X
 
-firewall-cmd --reload
-
-log "Clearing existing services/ports/rules from 'secure' zone..."
-for svc in $(firewall-cmd --zone=secure --list-services); do
-  firewall-cmd --permanent --zone=secure --remove-service="$svc" || true
-done
-for p in $(firewall-cmd --zone=secure --list-ports); do
-  firewall-cmd --permanent --zone=secure --remove-port="$p" || true
-done
-existing_rich=$(firewall-cmd --zone=secure --list-rich-rules)
-if [ -n "$existing_rich" ]; then
-  while IFS= read -r rr; do
-    [ -n "$rr" ] && firewall-cmd --permanent --zone=secure --remove-rich-rule="$rr" || true
-  done <<<"$existing_rich"
-fi
-
-log "Setting zone target to DROP..."
-firewall-cmd --permanent --zone=secure --set-target=DROP
+# Set default policies to DROP
+iptables -P INPUT DROP
+iptables -P FORWARD DROP
+iptables -P OUTPUT DROP
 
 # Allow loopback
-firewall-cmd --permanent --zone=secure --add-interface=lo
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A OUTPUT -o lo -j ACCEPT
 
-# Allow only required services
-log "Allowing HTTPS, DNS, DHCP services in 'secure' zone..."
-firewall-cmd --permanent --zone=secure --add-service=https
-firewall-cmd --permanent --zone=secure --add-service=dns
-firewall-cmd --permanent --zone=secure --add-service=dhcp
-firewall-cmd --permanent --zone=secure --add-service=dhcpv6-client
+# Allow established and related connections
+iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-# Allow ICMP
-firewall-cmd --permanent --zone=secure --add-rich-rule='rule protocol value="icmp" accept'
+# Allow incoming ICMP
+iptables -A INPUT -p icmp -j ACCEPT
+iptables -A OUTPUT -p icmp -j ACCEPT
 
-# Ensure SSH is blocked
-firewall-cmd --permanent --zone=secure --remove-service=ssh || true
-firewall-cmd --permanent --zone=secure --remove-port=22/tcp || true
+# Allow incoming DNS (TCP/UDP 53)
+iptables -A INPUT -p udp --dport 53 -j ACCEPT
+iptables -A INPUT -p tcp --dport 53 -j ACCEPT
 
-# Assign all active, non-loopback interfaces to 'secure' zone
-for iface in $(ip -o link show up | awk -F': ' '{print $2}' | grep -v lo); do
-  firewall-cmd --permanent --zone=secure --add-interface="$iface" || true
-done
+# Allow outgoing DNS
+iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
 
-# Set default zone to 'secure'
-firewall-cmd --set-default-zone=secure
-firewall-cmd --permanent --set-default-zone=secure
+# Allow incoming DHCP (UDP 67:68)
+iptables -A INPUT -p udp --dport 67:68 -j ACCEPT
+iptables -A OUTPUT -p udp --dport 67:68 -j ACCEPT
 
-log "Reloading firewalld..."
-firewall-cmd --reload
-log "Active zones:"
-firewall-cmd --get-active-zones
-log "Secure zone rules:"
-firewall-cmd --zone=secure --list-all
+# Allow HTTPS (TCP 443) both ways
+iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+
+# Save rules to persist across reboot
+if command -v netfilter-persistent >/dev/null 2>&1; then
+    netfilter-persistent save
+else
+    apt install -y netfilter-persistent
+    netfilter-persistent save
+fi
+
+log "iptables rules applied:"
+iptables -L -v --line-numbers
 
 ############################################
 # 3) Disable and remove unneeded services
@@ -166,7 +162,7 @@ sysctl --system >/dev/null || true
 # 7) Done
 ############################################
 log "System hardening complete!"
-echo "- Firewall: blocks all except HTTPS (443), DNS (53), DHCP (67/68 & dhcpv6-client) and ICMP"
+echo "- Firewall: blocks all except HTTPS (443), DNS (53), DHCP (67/68) and ICMP"
 echo "- SSH: disabled/removed"
 echo "- Automatic security updates enabled"
 echo "- AppArmor, auditd, and fail2ban active"
