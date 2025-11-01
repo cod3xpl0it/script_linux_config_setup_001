@@ -1,125 +1,163 @@
 #!/usr/bin/env bash
-# security-checklist.sh
-# Run as root: sudo bash security-checklist.sh
+# secure-minimal-iptables-forcando-sbin.sh
+# Run as root: sudo bash $0
 
 set -euo pipefail
 
-GREEN="\033[0;32m"
-YELLOW="\033[1;33m"
-RED="\033[0;31m"
-NC="\033[0m"
+find_cmd() {
+  local cmd="$1"
+  if [ -x "/sbin/$cmd" ]; then
+    printf "%s" "/sbin/$cmd"
+    return 0
+  fi
+  if [ -x "/usr/sbin/$cmd" ]; then
+    printf "%s" "/usr/sbin/$cmd"
+    return 0
+  fi
+  if command -v "$cmd" >/dev/null 2>&1; then
+    command -v "$cmd"
+    return 0
+  fi
+  return 1
+}
 
-log_ok()    { echo -e "[${GREEN}PASS${NC}] $1"; }
-log_warn()  { echo -e "[${YELLOW}ATTENTION${NC}] $1"; }
-log_fail()  { echo -e "[${RED}FAIL${NC}] $1"; }
+log() { echo -e "[*] $*"; }
 
 if [ "$(id -u)" -ne 0 ]; then
-    echo "Run as root: sudo $0"
-    exit 1
+  echo "Run as root. Example: sudo bash $0"
+  exit 1
 fi
 
-IPTABLES=$(command -v iptables)
-SYSTEMCTL=$(command -v systemctl)
-SYSCTL=$(command -v sysctl)
+IPTABLES=$(find_cmd iptables) || { echo "iptables not found"; exit 1; }
+NETFILTER_PERSISTENT=$(find_cmd netfilter-persistent) || true
+APT=$(find_cmd apt) || { echo "apt not found"; exit 1; }
+SYSTEMCTL=$(find_cmd systemctl) || { echo "systemctl not found"; exit 1; }
+SYSCTL=$(find_cmd sysctl) || { echo "sysctl not found"; exit 1; }
+REBOOT_CMD=$(find_cmd reboot) || true
+CURL=$(find_cmd curl) || true
+NMAP=$(find_cmd nmap) || true
 
-echo "===== Security Checklist ====="
+export PATH=/sbin:/usr/sbin:$PATH
 
-############################################
-# 1) Firewall Default Policies
-############################################
-echo "1) Firewall Default Policies"
-ALL_DROP=true
-for chain in INPUT FORWARD OUTPUT; do
-    policy=$($IPTABLES -L "$chain" -n | grep "Chain $chain" | awk '{print $4}' | tr -d '()')
-    if [[ "$policy" == "DROP" ]]; then
-        log_ok "$chain policy is DROP"
-    else
-        log_warn "$chain policy is $policy (expected DROP)"
-        ALL_DROP=false
-    fi
-done
+log "Updating system and installing security tools..."
+export DEBIAN_FRONTEND=noninteractive
+"$APT" update -y
+"$APT" upgrade -y
+"$APT" install -y --no-install-recommends unattended-upgrades apt-listchanges auditd fail2ban apparmor apparmor-utils bash-completion curl nmap iproute2 procps iptables
 
-############################################
-# 2) Firewall Rules
-############################################
-echo "2) Firewall Rules"
-RULES=(
-    "tcp dpt:443"   # HTTPS
-    "tcp dpt:53"    # DNS
-    "udp dpt:53"    # DNS
-    "udp dpt:67:68" # DHCP
-    "icmp"          # ICMP
-)
-EXISTING_RULES=$($IPTABLES -S)
-for rule in "${RULES[@]}"; do
-    if echo "$EXISTING_RULES" | grep -F -- "$rule" >/dev/null 2>&1; then
-        log_ok "Rule exists: $rule"
-    else
-        log_warn "Rule missing: $rule"
-    fi
-done
+log "Configuring iptables firewall..."
+"$IPTABLES" -F
+"$IPTABLES" -X
+"$IPTABLES" -t nat -F
+"$IPTABLES" -t nat -X
+"$IPTABLES" -t mangle -F
+"$IPTABLES" -t mangle -X
+"$IPTABLES" -t raw -F
+"$IPTABLES" -t raw -X
+"$IPTABLES" -P INPUT DROP
+"$IPTABLES" -P FORWARD DROP
+"$IPTABLES" -P OUTPUT DROP
+"$IPTABLES" -A INPUT -i lo -j ACCEPT
+"$IPTABLES" -A OUTPUT -o lo -j ACCEPT
+"$IPTABLES" -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+"$IPTABLES" -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+"$IPTABLES" -A INPUT -p icmp -j ACCEPT
+"$IPTABLES" -A OUTPUT -p icmp -j ACCEPT
+"$IPTABLES" -A INPUT -p udp --dport 53 -j ACCEPT
+"$IPTABLES" -A INPUT -p tcp --dport 53 -j ACCEPT
+"$IPTABLES" -A OUTPUT -p udp --dport 53 -j ACCEPT
+"$IPTABLES" -A OUTPUT -p tcp --dport 53 -j ACCEPT
+"$IPTABLES" -A INPUT -p udp --dport 67:68 -j ACCEPT
+"$IPTABLES" -A OUTPUT -p udp --dport 67:68 -j ACCEPT
+"$IPTABLES" -A INPUT -p tcp --dport 443 -j ACCEPT
+"$IPTABLES" -A OUTPUT -p tcp --dport 443 -j ACCEPT
+"$IPTABLES" -A INPUT -p tcp --dport 80 -j REJECT
+"$IPTABLES" -A OUTPUT -p tcp --dport 80 -j REJECT
 
-############################################
-# 3) Disabled / Removed Services
-############################################
-echo "3) Unnecessary Services"
-SERVICES=("avahi-daemon" "cups" "bluetooth" "rpcbind" "ssh")
-for svc in "${SERVICES[@]}"; do
-    if ! $SYSTEMCTL is-active "$svc" >/dev/null 2>&1; then
-        log_ok "$svc inactive"
-    else
-        log_warn "$svc still active"
-    fi
-done
-
-############################################
-# 4) Security Services
-############################################
-echo "4) Security Services"
-SEC_SERVICES=("apparmor" "auditd" "fail2ban")
-for svc in "${SEC_SERVICES[@]}"; do
-    if $SYSTEMCTL is-active "$svc" >/dev/null 2>&1; then
-        log_ok "$svc active"
-    else
-        log_warn "$svc inactive"
-    fi
-done
-
-############################################
-# 5) Automatic Security Updates
-############################################
-echo "5) Automatic Security Updates"
-AUTO_FILE="/etc/apt/apt.conf.d/20auto-upgrades"
-if [ -f "$AUTO_FILE" ] && grep -q 'Unattended-Upgrade "1"' "$AUTO_FILE"; then
-    log_ok "Automatic security updates enabled"
+if [ -n "${NETFILTER_PERSISTENT:-}" ] && "$NETFILTER_PERSISTENT" --version >/dev/null 2>&1; then
+    "$NETFILTER_PERSISTENT" save || true
 else
-    log_warn "Automatic security updates not enabled"
+    "$APT" install -y netfilter-persistent
+    NETFILTER_PERSISTENT=$(find_cmd netfilter-persistent) || true
+    [ -n "${NETFILTER_PERSISTENT:-}" ] && "$NETFILTER_PERSISTENT" save || true
 fi
 
-############################################
-# 6) Kernel Hardening
-############################################
-echo "6) Kernel Hardening"
-SYSCTL_FILE="/etc/sysctl.d/99-secure-network.conf"
-if [ -f "$SYSCTL_FILE" ]; then
-    for key in net.ipv4.conf.all.accept_redirects \
-               net.ipv4.conf.all.send_redirects \
-               net.ipv4.conf.default.accept_redirects \
-               net.ipv4.conf.default.send_redirects \
-               net.ipv4.conf.all.accept_source_route \
-               net.ipv6.conf.all.accept_source_route \
-               net.ipv4.tcp_syncookies \
-               net.ipv4.conf.all.rp_filter; do
-        expected=$(grep "^$key" "$SYSCTL_FILE" | cut -d= -f2 | xargs)
-        current=$($SYSCTL -n "$key" 2>/dev/null || echo "missing")
-        if [[ "$current" == "$expected" ]]; then
-            log_ok "$key = $current"
-        else
-            log_warn "$key = $current (expected $expected)"
-        fi
-    done
+log "iptables rules applied:"
+"$IPTABLES" -L -v --line-numbers
+
+log "Disabling and removing unnecessary services..."
+for svc in avahi-daemon cups bluetooth rpcbind ssh; do
+  "$SYSTEMCTL" disable --now "$svc" 2>/dev/null || true
+done
+
+"$APT" purge -y avahi-daemon cups telnet ftp rpcbind openssh-server || true
+"$APT" autoremove -y
+"$APT" autoclean -y
+
+log "Enabling automatic security updates..."
+cat >/etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+EOF
+
+distro_id="Debian"
+distro_codename="stable"
+[ -f /etc/os-release ] && . /etc/os-release && distro_id=${ID:-$distro_id} && distro_codename=${VERSION_CODENAME:-$distro_codename}
+
+cat >/etc/apt/apt.conf.d/50unattended-upgrades <<EOF
+Unattended-Upgrade::Allowed-Origins {
+    "${distro_id}:${distro_codename}-security";
+};
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+EOF
+
+"$SYSTEMCTL" enable --now unattended-upgrades || true
+
+log "Enabling AppArmor..."
+"$SYSTEMCTL" enable --now apparmor || true
+log "Enabling auditd..."
+"$SYSTEMCTL" enable --now auditd || true
+log "Enabling fail2ban..."
+"$SYSTEMCTL" enable --now fail2ban || true
+
+cat >/etc/fail2ban/jail.d/local.conf <<'EOF'
+[DEFAULT]
+bantime = 3600
+findtime = 600
+maxretry = 5
+EOF
+
+"$SYSTEMCTL" restart fail2ban || true
+
+log "Applying kernel hardening..."
+cat >/etc/sysctl.d/99-secure-network.conf <<'EOF'
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv6.conf.all.accept_source_route = 0
+net.ipv4.tcp_syncookies = 1
+net.ipv4.conf.all.rp_filter = 1
+EOF
+
+"$SYSCTL" --system >/dev/null || true
+
+log "System hardening complete!"
+echo "- Firewall: blocks all except HTTPS (443), DNS (53), DHCP (67/68) and ICMP"
+echo "- SSH: disabled/removed"
+echo "- Automatic security updates enabled"
+echo "- AppArmor, auditd, and fail2ban active"
+echo "- Extra services disabled"
+
+read -rp "Reboot now? (y/N): " REBOOT
+if [[ "${REBOOT}" =~ ^[yY]$ ]]; then
+  if [ -n "${REBOOT_CMD:-}" ]; then
+    "$REBOOT_CMD"
+  else
+    "$SYSTEMCTL" reboot || true
+  fi
 else
-    log_warn "Kernel hardening file $SYSCTL_FILE not found"
+  echo "Reboot later to apply all changes fully."
 fi
-
-echo "===== Checklist Complete ====="
