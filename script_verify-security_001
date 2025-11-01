@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
-# security-checklist.sh
-# Run as root: sudo bash security-checklist.sh
+# security-checklist-compact.sh
+# Run as root: sudo bash security-checklist-compact.sh
 
 set -euo pipefail
 
 GREEN="\033[0;32m"
 YELLOW="\033[1;33m"
-RED="\033[0;31m"
 NC="\033[0m"
 
-log_ok()    { echo -e "[${GREEN}PASS${NC}] $1"; }
-log_warn()  { echo -e "[${YELLOW}ATTENTION${NC}] $1"; }
-log_fail()  { echo -e "[${RED}FAIL${NC}] $1"; }
+log_ok()   { echo -e "[${GREEN}PASS${NC}] $1"; }
+log_warn() { echo -e "[${YELLOW}ATTENTION${NC}] $1"; }
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "Run as root: sudo $0"
@@ -24,102 +22,60 @@ SYSCTL=$(command -v sysctl)
 
 echo "===== Security Checklist ====="
 
-############################################
 # 1) Firewall Default Policies
-############################################
-echo "1) Firewall Default Policies"
 ALL_DROP=true
 for chain in INPUT FORWARD OUTPUT; do
     policy=$($IPTABLES -L "$chain" -n | grep "Chain $chain" | awk '{print $4}' | tr -d '()')
-    if [[ "$policy" == "DROP" ]]; then
-        log_ok "$chain policy is DROP"
-    else
-        log_warn "$chain policy is $policy (expected DROP)"
-        ALL_DROP=false
-    fi
+    [[ "$policy" != "DROP" ]] && ALL_DROP=false
 done
+if $ALL_DROP; then log_ok "Firewall policies set to DROP"; else log_warn "Firewall policies not all DROP"; fi
 
-############################################
 # 2) Firewall Rules
-############################################
-echo "2) Firewall Rules"
-RULES=(
-    "tcp dpt:443"   # HTTPS
-    "tcp dpt:53"    # DNS
-    "udp dpt:53"    # DNS
-    "udp dpt:67:68" # DHCP
-    "icmp"          # ICMP
-)
+RULES=("tcp dpt:443" "tcp dpt:53" "udp dpt:53" "udp dpt:67:68" "icmp")
 EXISTING_RULES=$($IPTABLES -S)
-for rule in "${RULES[@]}"; do
-    if echo "$EXISTING_RULES" | grep -F -- "$rule" >/dev/null 2>&1; then
-        log_ok "Rule exists: $rule"
-    else
-        log_warn "Rule missing: $rule"
-    fi
+MISSING_RULES=0
+for r in "${RULES[@]}"; do
+    ! echo "$EXISTING_RULES" | grep -F -- "$r" >/dev/null 2>&1 && ((MISSING_RULES++))
 done
+if [ $MISSING_RULES -eq 0 ]; then log_ok "Essential firewall rules present"; else log_warn "$MISSING_RULES firewall rules missing"; fi
 
-############################################
 # 3) Disabled / Removed Services
-############################################
-echo "3) Unnecessary Services"
 SERVICES=("avahi-daemon" "cups" "bluetooth" "rpcbind" "ssh")
+ACTIVE_SERVICES=0
 for svc in "${SERVICES[@]}"; do
-    if ! $SYSTEMCTL is-active "$svc" >/dev/null 2>&1; then
-        log_ok "$svc inactive"
-    else
-        log_warn "$svc still active"
-    fi
+    $SYSTEMCTL is-active "$svc" >/dev/null 2>&1 && ((ACTIVE_SERVICES++))
 done
+if [ $ACTIVE_SERVICES -eq 0 ]; then log_ok "Unnecessary services disabled"; else log_warn "$ACTIVE_SERVICES unnecessary services active"; fi
 
-############################################
 # 4) Security Services
-############################################
-echo "4) Security Services"
 SEC_SERVICES=("apparmor" "auditd" "fail2ban")
+INACTIVE_SEC=0
 for svc in "${SEC_SERVICES[@]}"; do
-    if $SYSTEMCTL is-active "$svc" >/dev/null 2>&1; then
-        log_ok "$svc active"
-    else
-        log_warn "$svc inactive"
-    fi
+    ! $SYSTEMCTL is-active "$svc" >/dev/null 2>&1 && ((INACTIVE_SEC++))
 done
+if [ $INACTIVE_SEC -eq 0 ]; then log_ok "Security services active"; else log_warn "$INACTIVE_SEC security services inactive"; fi
 
-############################################
 # 5) Automatic Security Updates
-############################################
-echo "5) Automatic Security Updates"
 AUTO_FILE="/etc/apt/apt.conf.d/20auto-upgrades"
 if [ -f "$AUTO_FILE" ] && grep -q 'Unattended-Upgrade "1"' "$AUTO_FILE"; then
-    log_ok "Automatic security updates enabled"
-else
-    log_warn "Automatic security updates not enabled"
-fi
+    log_ok "Automatic security updates enabled"; else log_warn "Automatic security updates not enabled"; fi
 
-############################################
 # 6) Kernel Hardening
-############################################
-echo "6) Kernel Hardening"
 SYSCTL_FILE="/etc/sysctl.d/99-secure-network.conf"
+HARDEN_MISMATCH=0
 if [ -f "$SYSCTL_FILE" ]; then
-    for key in net.ipv4.conf.all.accept_redirects \
-               net.ipv4.conf.all.send_redirects \
-               net.ipv4.conf.default.accept_redirects \
-               net.ipv4.conf.default.send_redirects \
-               net.ipv4.conf.all.accept_source_route \
-               net.ipv6.conf.all.accept_source_route \
-               net.ipv4.tcp_syncookies \
-               net.ipv4.conf.all.rp_filter; do
+    KEYS=(net.ipv4.conf.all.accept_redirects net.ipv4.conf.all.send_redirects \
+          net.ipv4.conf.default.accept_redirects net.ipv4.conf.default.send_redirects \
+          net.ipv4.conf.all.accept_source_route net.ipv6.conf.all.accept_source_route \
+          net.ipv4.tcp_syncookies net.ipv4.conf.all.rp_filter)
+    for key in "${KEYS[@]}"; do
         expected=$(grep "^$key" "$SYSCTL_FILE" | cut -d= -f2 | xargs)
         current=$($SYSCTL -n "$key" 2>/dev/null || echo "missing")
-        if [[ "$current" == "$expected" ]]; then
-            log_ok "$key = $current"
-        else
-            log_warn "$key = $current (expected $expected)"
-        fi
+        [[ "$current" != "$expected" ]] && ((HARDEN_MISMATCH++))
     done
 else
-    log_warn "Kernel hardening file $SYSCTL_FILE not found"
+    ((HARDEN_MISMATCH++))
 fi
+if [ $HARDEN_MISMATCH -eq 0 ]; then log_ok "Kernel hardening applied"; else log_warn "$HARDEN_MISMATCH kernel settings not applied"; fi
 
 echo "===== Checklist Complete ====="
