@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# secure-minimal.sh
+# Run as root (sudo ./secure-minimal.sh)
+# Goal: make Debian minimal and secure
+# Blocks all traffic except HTTPS, DNS, and DHCP
+# Enables AppArmor, automatic updates, audit logs, fail2ban, and removes weak services
+
+set -euo pipefail
+
+log() { echo -e "[*] $*"; }
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Run as root. Example: sudo bash $0"
+  exit 1
+fi
+
+############################################
+# 1) Update and install needed packages
+############################################
+log "Updating system and installing security tools..."
+export DEBIAN_FRONTEND=noninteractive
+apt update -y
+apt upgrade -y
+
+apt install -y firewalld unattended-upgrades apt-listchanges auditd fail2ban apparmor apparmor-utils bash-completion
+
+############################################
+# 2) Configure firewall (firewalld)
+############################################
+log "Enabling firewalld..."
+systemctl enable --now firewalld
+
+log "Setting default zone to DROP (block everything by default)..."
+firewall-cmd --set-default-zone=drop
+
+# Allow loopback (local system)
+firewall-cmd --permanent --zone=trusted --add-interface=lo
+
+# Allow only HTTPS (443), DNS (53), and DHCP (67/68)
+log "Allowing only HTTPS, DNS, and DHCP..."
+# HTTPS
+firewall-cmd --permanent --add-rich-rule='rule family="ipv4" destination port port="443" protocol="tcp" accept'
+firewall-cmd --permanent --add-rich-rule='rule family="ipv6" destination port port="443" protocol="tcp" accept'
+# DNS
+firewall-cmd --permanent --add-rich-rule='rule family="ipv4" destination port port="53" protocol="udp" accept'
+firewall-cmd --permanent --add-rich-rule='rule family="ipv6" destination port port="53" protocol="udp" accept'
+# DHCP
+firewall-cmd --permanent --add-rich-rule='rule family="ipv4" destination port port="67-68" protocol="udp" accept'
+firewall-cmd --permanent --add-rich-rule='rule family="ipv6" destination port port="67-68" protocol="udp" accept'
+# Allow ICMP (ping)
+firewall-cmd --permanent --add-rich-rule='rule protocol value="icmp" accept'
+
+firewall-cmd --reload
+firewall-cmd --list-all
+
+############################################
+# 3) Disable and remove unneeded services
+############################################
+log "Disabling and removing unnecessary services..."
+for svc in ssh avahi-daemon cups bluetooth rpcbind; do
+  systemctl disable --now "$svc".service 2>/dev/null || true
+done
+
+apt purge -y avahi-daemon cups telnet ftp rpcbind openssh-server 2>/dev/null || true
+apt autoremove -y
+apt autoclean -y
+
+############################################
+# 4) Disable SSH (you don’t use it)
+############################################
+log "Making sure SSH is disabled..."
+systemctl disable --now ssh 2>/dev/null || true
+
+############################################
+# 5) Enable automatic security updates
+############################################
+log "Enabling automatic security updates..."
+cat >/etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+EOF
+
+cat >/etc/apt/apt.conf.d/50unattended-upgrades <<'EOF'
+Unattended-Upgrade::Allowed-Origins {
+    "${distro_id}:${distro_codename}-security";
+};
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+EOF
+
+systemctl enable --now unattended-upgrades || true
+
+############################################
+# 6) Enable AppArmor, audit logs, and fail2ban
+############################################
+log "Enabling AppArmor..."
+systemctl enable --now apparmor
+
+log "Enabling auditd (system logging)..."
+systemctl enable --now auditd
+
+log "Enabling fail2ban..."
+systemctl enable --now fail2ban || true
+
+# Minimal fail2ban config
+cat >/etc/fail2ban/jail.d/local.conf <<'EOF'
+[DEFAULT]
+bantime = 3600
+findtime = 600
+maxretry = 5
+EOF
+
+############################################
+# 7) Secure network kernel settings
+############################################
+log "Applying kernel hardening (sysctl)..."
+cat >/etc/sysctl.d/99-secure-network.conf <<'EOF'
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv6.conf.all.accept_source_route = 0
+net.ipv4.tcp_syncookies = 1
+net.ipv4.conf.all.rp_filter = 1
+EOF
+sysctl --system >/dev/null || true
+
+############################################
+# 8) Done
+############################################
+log "System hardening complete!"
+echo "- Firewall blocks all except HTTPS (443), DNS (53), and DHCP (67/68)"
+echo "- SSH disabled and removed"
+echo "- Automatic security updates enabled"
+echo "- AppArmor, auditd, and fail2ban active"
+echo "- Extra services disabled"
+
+read -rp "Reboot now? (y/N): " REBOOT
+if [[ "$REBOOT" =~ ^[yY]$ ]]; then
+  reboot
+else
+  echo "Reboot later to apply all changes."
+fi
