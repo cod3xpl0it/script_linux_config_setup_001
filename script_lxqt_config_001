@@ -19,6 +19,9 @@ sudo systemctl set-default graphical.target
 # Enable LightDM to start on boot
 sudo systemctl enable lightdm
 
+# Install Firefox ESR (Extended Support Release, secure and stable)
+sudo apt install -y firefox-esr
+
 # Inform the user that the configuration is complete
 echo "Configuration complete. Please restart the system to start in the graphical environment."
 
