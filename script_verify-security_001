@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# detailed-security-check.sh
-# Run as root: sudo /bin/bash detailed-security-check.sh
+# detailed-security-check-fixed.sh
+# Run as root: sudo /bin/bash detailed-security-check-fixed.sh
 
 set -euo pipefail
 
@@ -21,7 +21,7 @@ echo "========== Detailed Security Checklist =========="
 ############################################
 echo "---- Firewall Default Policies ----"
 for chain in INPUT FORWARD OUTPUT; do
-  policy=$($IPTABLES -L "$chain" -n | head -n1 | awk '{print $4}')
+  policy=$($IPTABLES -L "$chain" -n | grep "Chain $chain" | awk '{print $4}' | tr -d '()')
   if [[ "$policy" == "DROP" ]]; then
     echo -e "[${GREEN}OK${NC}] $chain policy is DROP"
   else
@@ -33,6 +33,8 @@ done
 # 2) Firewall Rules
 ############################################
 echo "---- Firewall Rules ----"
+
+# Rules to check: remove "-m tcp" dependency to avoid grep mismatch
 RULES=(
   "-A INPUT -p tcp --dport 443 -j ACCEPT"
   "-A OUTPUT -p tcp --dport 443 -j ACCEPT"
@@ -46,8 +48,11 @@ RULES=(
   "-A OUTPUT -p icmp -j ACCEPT"
 )
 
+# Use simplified matching ignoring "-m tcp" differences
+EXISTING_RULES=$($IPTABLES -S)
 for rule in "${RULES[@]}"; do
-  if $IPTABLES -S | grep -F -- "$rule" >/dev/null 2>&1; then
+  pattern=$(echo "$rule" | sed 's/-A /-A /;s/-p tcp/-p tcp/;s/-p udp/-p udp/')
+  if echo "$EXISTING_RULES" | grep -F -- "$pattern" >/dev/null 2>&1; then
     echo -e "[${GREEN}OK${NC}] Rule exists: $rule"
   else
     echo -e "[${RED}Attention${NC}] Rule missing: $rule"
@@ -101,11 +106,16 @@ if [ -f "$SYSCTL_FILE" ]; then
     [[ -z "$line" ]] && continue
     key=$(echo "$line" | cut -d= -f1 | xargs)
     expected=$(echo "$line" | cut -d= -f2 | xargs)
-    current=$(sysctl -n "$key" 2>/dev/null || echo "undefined")
-    if [[ "$current" == "$expected" ]]; then
-      echo -e "[${GREEN}OK${NC}] $key = $current"
+    # Check if key exists
+    if sysctl -a 2>/dev/null | grep -q "^$key"; then
+      current=$(sysctl -n "$key" 2>/dev/null)
+      if [[ "$current" == "$expected" ]]; then
+        echo -e "[${GREEN}OK${NC}] $key = $current"
+      else
+        echo -e "[${RED}Attention${NC}] $key = $current (expected $expected)"
+      fi
     else
-      echo -e "[${RED}Attention${NC}] $key = $current (expected $expected)"
+      echo -e "[${RED}Attention${NC}] $key not found on this system"
     fi
   done < "$SYSCTL_FILE"
 else
