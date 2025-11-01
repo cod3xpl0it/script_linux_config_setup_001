@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# verify-security.sh
+# Run as normal user or sudo
+# Checks system hardening and runs simple live tests
+
+set -euo pipefail
+
+GREEN="\e[32m"
+RED="\e[31m"
+YELLOW="\e[33m"
+RESET="\e[0m"
+
+check() {
+  if "$@" >/dev/null 2>&1; then
+    echo -e "${GREEN}[OK]${RESET} $*"
+  else
+    echo -e "${RED}[FAIL]${RESET} $*"
+  fi
+}
+
+echo -e "\n🔍 Checking system security status...\n"
+
+############################################
+# 1) Firewall check
+############################################
+echo "🔥 Checking firewall (firewalld)..."
+if systemctl is-active --quiet firewalld; then
+  echo -e "${GREEN}[OK]${RESET} firewalld is active"
+else
+  echo -e "${RED}[FAIL]${RESET} firewalld is NOT active"
+fi
+
+DEFAULT_ZONE=$(firewall-cmd --get-default-zone 2>/dev/null || echo "unknown")
+echo "Default zone: $DEFAULT_ZONE"
+if [[ "$DEFAULT_ZONE" == "drop" ]]; then
+  echo -e "${GREEN}[OK]${RESET} Default zone is DROP (secure)"
+else
+  echo -e "${RED}[WARN]${RESET} Default zone is not DROP"
+fi
+
+echo "Allowed ports:"
+firewall-cmd --list-all | grep "ports" || true
+
+############################################
+# 2) AppArmor check
+############################################
+echo -e "\n🛡️ Checking AppArmor..."
+if systemctl is-active --quiet apparmor; then
+  echo -e "${GREEN}[OK]${RESET} AppArmor is running"
+  if apparmor_status | grep -q "profiles are loaded"; then
+    echo -e "${GREEN}[OK]${RESET} AppArmor profiles loaded"
+  else
+    echo -e "${RED}[WARN]${RESET} No profiles loaded"
+  fi
+else
+  echo -e "${RED}[FAIL]${RESET} AppArmor not active"
+fi
+
+############################################
+# 3) auditd and fail2ban check
+############################################
+echo -e "\n📜 Checking auditd and fail2ban..."
+check systemctl is-active auditd
+check systemctl is-active fail2ban
+
+############################################
+# 4) Automatic updates check
+############################################
+echo -e "\n🔄 Checking automatic updates..."
+if systemctl is-enabled unattended-upgrades >/dev/null 2>&1; then
+  echo -e "${GREEN}[OK]${RESET} unattended-upgrades enabled"
+else
+  echo -e "${RED}[FAIL]${RESET} unattended-upgrades not enabled"
+fi
+
+############################################
+# 5) SSH check
+############################################
+echo -e "\n🚫 Checking SSH..."
+if systemctl list-unit-files | grep -q '^ssh.service'; then
+  echo -e "${RED}[FAIL]${RESET} SSH service still installed or active"
+else
+  echo -e "${GREEN}[OK]${RESET} SSH not present"
+fi
+
+############################################
+# 6) Network tests
+############################################
+echo -e "\n🌐 Running network tests (HTTPS / HTTP / DNS)..."
+
+echo -n "Testing HTTPS access (should work): "
+if curl -Is https://www.debian.org --max-time 10 >/dev/null 2>&1; then
+  echo -e "${GREEN}OK${RESET}"
+else
+  echo -e "${RED}FAIL${RESET}"
+fi
+
+echo -n "Testing HTTP access (should FAIL): "
+if curl -Is http://example.com --max-time 10 >/dev/null 2>&1; then
+  echo -e "${RED}NOT BLOCKED (UNSAFE)${RESET}"
+else
+  echo -e "${GREEN}BLOCKED${RESET}"
+fi
+
+echo -n "Testing DNS resolution (should work): "
+if getent hosts debian.org >/dev/null 2>&1; then
+  echo -e "${GREEN}OK${RESET}"
+else
+  echo -e "${RED}FAIL${RESET}"
+fi
+
+############################################
+# 7) Summary
+############################################
+echo -e "\n✅ Verification complete."
+echo "If all [OK] or [BLOCKED] appear green, your system is properly hardened."
+echo "If you see [FAIL] or [WARN], review those areas."
+
+echo -e "\nYou can re-run this test anytime after updates or firewall changes."
