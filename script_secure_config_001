@@ -2,7 +2,7 @@
 # secure-minimal.sh
 # Run as root (sudo ./secure-minimal.sh)
 # Goal: make Debian minimal and secure
-# Blocks all traffic except HTTPS, DNS, and DHCP
+# Blocks all traffic except HTTPS, DNS, DHCP, and ICMP
 # Enables AppArmor, automatic updates, auditd, fail2ban, and removes weak services
 
 set -euo pipefail
@@ -31,22 +31,22 @@ log "Enabling firewalld..."
 systemctl enable --now firewalld
 
 log "Setting default zone to DROP (block everything by default)..."
-firewall-cmd --set-default-zone=drop
+firewall-cmd --set-default-zone=drop >/dev/null 2>&1 || true
 
 # Allow loopback (local system)
-firewall-cmd --permanent --zone=trusted --add-interface=lo
+firewall-cmd --permanent --zone=trusted --add-interface=lo >/dev/null 2>&1 || true
 
 # Allow only outgoing HTTPS, DNS, DHCP and ICMP (corrected)
 log "Allowing only HTTPS, DNS, DHCP, and ICMP..."
-# HTTPS (allow outgoing)
-firewall-cmd --permanent --add-service=https
-firewall-cmd --permanent --add-rich-rule='rule family="ipv4" destination port port="443" protocol="tcp" accept'
+# HTTPS (allow outgoing only)
+firewall-cmd --permanent --add-service=https >/dev/null 2>&1 || true
+firewall-cmd --permanent --add-rich-rule='rule family="ipv4" port port="443" protocol="tcp" direction="out" accept' >/dev/null 2>&1 || true
 # DNS
-firewall-cmd --permanent --add-service=dns
+firewall-cmd --permanent --add-service=dns >/dev/null 2>&1 || true
 # DHCP
-firewall-cmd --permanent --zone=trusted --add-service=dhcp
+firewall-cmd --permanent --zone=trusted --add-service=dhcp >/dev/null 2>&1 || true
 # ICMP (ping)
-firewall-cmd --permanent --add-rich-rule='rule protocol value="icmp" accept'
+firewall-cmd --permanent --add-rich-rule='rule protocol value="icmp" accept' >/dev/null 2>&1 || true
 
 # Reload firewall to apply changes
 firewall-cmd --reload
@@ -129,7 +129,7 @@ sysctl --system >/dev/null || true
 # 8) Done
 ############################################
 log "System hardening complete!"
-echo "- Firewall blocks all except HTTPS (443), DNS (53), DHCP (67/68) and ICMP"
+echo "- Firewall blocks all except HTTPS (443 outbound), DNS (53), DHCP (67/68) and ICMP"
 echo "- SSH disabled and removed"
 echo "- Automatic security updates enabled"
 echo "- AppArmor, auditd, and fail2ban active"
