@@ -28,28 +28,27 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-# Detect essential commands
-IPTABLES=$(find_cmd iptables) || { echo "iptables not found"; exit 1; }
-NETFILTER_PERSISTENT=$(find_cmd netfilter-persistent) || true
-APT=$(find_cmd apt) || { echo "apt not found"; exit 1; }
-SYSTEMCTL=$(find_cmd systemctl) || { echo "systemctl not found"; exit 1; }
-SYSCTL=$(find_cmd sysctl) || { echo "sysctl not found"; exit 1; }
-REBOOT_CMD=$(find_cmd reboot) || true
-CURL=$(find_cmd curl) || true
-NMAP=$(find_cmd nmap) || true
-
+export DEBIAN_FRONTEND=noninteractive
 export PATH=/sbin:/usr/sbin:$PATH
 
-# Ask about HTTP blocking before anything else
-read -rp "Do you want to block HTTP (port 80)?? (y/N): " BLOCK_HTTP
+log "Atualizando sistema e instalando ferramentas essenciais..."
+apt update -y
+apt upgrade -y
+apt install -y --no-install-recommends \
+iptables netfilter-persistent sysvinit-utils \
+unattended-upgrades apt-listchanges auditd fail2ban \
+apparmor apparmor-utils bash-completion curl nmap iproute2 procps
 
-log "Updating system and installing security tools..."
-export DEBIAN_FRONTEND=noninteractive
-"$APT" update -y
-"$APT" upgrade -y
-"$APT" install -y --no-install-recommends unattended-upgrades apt-listchanges auditd fail2ban apparmor apparmor-utils bash-completion curl nmap iproute2 procps iptables
 
-log "Configuring iptables firewall..."
+# Recarregar comandos detectáveis
+IPTABLES=$(find_cmd iptables) || { echo "iptables não encontrado"; exit 1; }
+NETFILTER_PERSISTENT=$(find_cmd netfilter-persistent) || true
+SYSTEMCTL=$(find_cmd systemctl) || { echo "systemctl não encontrado"; exit 1; }
+SYSCTL=$(find_cmd sysctl) || { echo "sysctl não encontrado"; exit 1; }
+REBOOT_CMD=$(find_cmd reboot) || true
+
+log "Configurando iptables..."
+# Flush existing rules
 "$IPTABLES" -F
 "$IPTABLES" -X
 "$IPTABLES" -t nat -F
@@ -58,57 +57,65 @@ log "Configuring iptables firewall..."
 "$IPTABLES" -t mangle -X
 "$IPTABLES" -t raw -F
 "$IPTABLES" -t raw -X
+
+# Default policies
 "$IPTABLES" -P INPUT DROP
 "$IPTABLES" -P FORWARD DROP
 "$IPTABLES" -P OUTPUT DROP
+
+# Loopback
 "$IPTABLES" -A INPUT -i lo -j ACCEPT
 "$IPTABLES" -A OUTPUT -o lo -j ACCEPT
+
+# Established connections
 "$IPTABLES" -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 "$IPTABLES" -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# ICMP
 "$IPTABLES" -A INPUT -p icmp -j ACCEPT
 "$IPTABLES" -A OUTPUT -p icmp -j ACCEPT
+
+# DNS
 "$IPTABLES" -A INPUT -p udp --dport 53 -j ACCEPT
 "$IPTABLES" -A INPUT -p tcp --dport 53 -j ACCEPT
 "$IPTABLES" -A OUTPUT -p udp --dport 53 -j ACCEPT
 "$IPTABLES" -A OUTPUT -p tcp --dport 53 -j ACCEPT
+
+# DHCP
 "$IPTABLES" -A INPUT -p udp --dport 67:68 -j ACCEPT
 "$IPTABLES" -A OUTPUT -p udp --dport 67:68 -j ACCEPT
+
+# HTTPS
 "$IPTABLES" -A INPUT -p tcp --dport 443 -j ACCEPT
 "$IPTABLES" -A OUTPUT -p tcp --dport 443 -j ACCEPT
 
-# Apply HTTP rules based on user choice
-if [[ "${BLOCK_HTTP}" =~ ^[yY]$ ]]; then
-    "$IPTABLES" -A INPUT -p tcp --dport 80 -j REJECT
-    "$IPTABLES" -A OUTPUT -p tcp --dport 80 -j REJECT
-    log "HTTP is blocked."
-else
-    "$IPTABLES" -A INPUT -p tcp --dport 80 -j ACCEPT
-    "$IPTABLES" -A OUTPUT -p tcp --dport 80 -j ACCEPT
-    log "HTTP is allowed."
-fi
+# HTTP (sempre permitido)
+"$IPTABLES" -A INPUT -p tcp --dport 80 -j ACCEPT
+"$IPTABLES" -A OUTPUT -p tcp --dport 80 -j ACCEPT
+log "HTTP liberado (porta 80)."
 
-# Save rules
+# Salvar regras imediatamente
 if [ -n "${NETFILTER_PERSISTENT:-}" ] && "$NETFILTER_PERSISTENT" --version >/dev/null 2>&1; then
     "$NETFILTER_PERSISTENT" save || true
 else
-    "$APT" install -y netfilter-persistent
+    apt install -y netfilter-persistent
     NETFILTER_PERSISTENT=$(find_cmd netfilter-persistent) || true
     [ -n "${NETFILTER_PERSISTENT:-}" ] && "$NETFILTER_PERSISTENT" save || true
 fi
 
-log "iptables rules applied:"
 "$IPTABLES" -L -v --line-numbers
 
-log "Disabling and removing unnecessary services..."
+# Serviços de segurança e hardening
+log "Desativando serviços desnecessários..."
 for svc in avahi-daemon cups bluetooth rpcbind ssh; do
   "$SYSTEMCTL" disable --now "$svc" 2>/dev/null || true
 done
 
-"$APT" purge -y avahi-daemon cups telnet ftp rpcbind openssh-server || true
-"$APT" autoremove -y
-"$APT" autoclean -y
+apt purge -y avahi-daemon cups telnet ftp rpcbind openssh-server || true
+apt autoremove -y
+apt autoclean -y
 
-log "Enabling automatic security updates..."
+log "Configurando atualizações automáticas..."
 cat >/etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
@@ -127,12 +134,8 @@ Unattended-Upgrade::Remove-Unused-Dependencies "true";
 EOF
 
 "$SYSTEMCTL" enable --now unattended-upgrades || true
-
-log "Enabling AppArmor..."
 "$SYSTEMCTL" enable --now apparmor || true
-log "Enabling auditd..."
 "$SYSTEMCTL" enable --now auditd || true
-log "Enabling fail2ban..."
 "$SYSTEMCTL" enable --now fail2ban || true
 
 cat >/etc/fail2ban/jail.d/local.conf <<'EOF'
@@ -144,7 +147,7 @@ EOF
 
 "$SYSTEMCTL" restart fail2ban || true
 
-log "Applying kernel hardening..."
+log "Aplicando hardening do kernel..."
 cat >/etc/sysctl.d/99-secure-network.conf <<'EOF'
 net.ipv4.conf.all.accept_redirects = 0
 net.ipv4.conf.all.send_redirects = 0
@@ -158,15 +161,14 @@ EOF
 
 "$SYSCTL" --system >/dev/null || true
 
-log "System hardening complete!"
-echo "- Firewall: blocks all except HTTPS (443), DNS (53), DHCP (67/68), and ICMP"
-echo "- HTTP: $( [[ "${BLOCK_HTTP}" =~ ^[yY]$ ]] && echo "blocked" || echo "allowed" )"
-echo "- SSH: disabled/removed"
-echo "- Automatic security updates enabled"
-echo "- AppArmor, auditd, and fail2ban active"
-echo "- Extra services disabled"
+log "Hardening completo!"
+echo "- Firewall: bloqueia tudo exceto HTTP (80), HTTPS (443), DNS (53), DHCP (67/68) e ICMP"
+echo "- SSH: desativado/removido"
+echo "- Atualizações automáticas habilitadas"
+echo "- AppArmor, auditd e fail2ban ativos"
+echo "- Serviços extras desativados"
 
-read -rp "Do you want to reboot now? (y/N): " REBOOT
+read -rp "Deseja reiniciar agora? (y/N): " REBOOT
 if [[ "${REBOOT}" =~ ^[yY]$ ]]; then
   if [ -n "${REBOOT_CMD:-}" ]; then
     "$REBOOT_CMD"
@@ -174,5 +176,5 @@ if [[ "${REBOOT}" =~ ^[yY]$ ]]; then
     "$SYSTEMCTL" reboot || true
   fi
 else
-  echo "Reboot later to apply all changes fully."
+  echo "Reinicie depois para aplicar todas as mudanças."
 fi
