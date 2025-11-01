@@ -31,15 +31,17 @@ else
 fi
 
 DEFAULT_ZONE=$(firewall-cmd --get-default-zone 2>/dev/null || echo "unknown")
-echo "Default zone: $DEFAULT_ZONE"
-if [[ "$DEFAULT_ZONE" == "drop" ]]; then
-  echo -e "${GREEN}[OK]${RESET} Default zone is DROP (secure)"
+ZONE_TARGET=$(firewall-cmd --zone="$DEFAULT_ZONE" --get-target 2>/dev/null || echo "unknown")
+
+echo "Default zone: $DEFAULT_ZONE (target: $ZONE_TARGET)"
+if [[ "$DEFAULT_ZONE" == "secure" && "$ZONE_TARGET" == "DROP" ]]; then
+  echo -e "${GREEN}[OK]${RESET} Default zone is 'secure' with target DROP"
 else
-  echo -e "${RED}[WARN]${RESET} Default zone is not DROP"
+  echo -e "${RED}[WARN]${RESET} Default zone not properly configured"
 fi
 
-echo "Allowed ports:"
-firewall-cmd --list-all | grep "ports" || true
+echo "Allowed services and ports in 'secure' zone:"
+firewall-cmd --zone=secure --list-all || true
 
 ############################################
 # 2) AppArmor check
@@ -77,16 +79,16 @@ fi
 # 5) SSH check
 ############################################
 echo -e "\n🚫 Checking SSH..."
-if systemctl list-unit-files | grep -q '^ssh.service'; then
-  echo -e "${RED}[FAIL]${RESET} SSH service still installed or active"
+if dpkg -l | grep -q openssh-server; then
+  echo -e "${RED}[FAIL]${RESET} SSH package still installed"
 else
-  echo -e "${GREEN}[OK]${RESET} SSH not present"
+  echo -e "${GREEN}[OK]${RESET} SSH package removed"
 fi
 
 ############################################
 # 6) Network tests
 ############################################
-echo -e "\n🌐 Running network tests (HTTPS / HTTP / DNS)..."
+echo -e "\n🌐 Running network tests (HTTPS / HTTP / DNS / ICMP)..."
 
 echo -n "Testing HTTPS access (should work): "
 if curl -Is https://www.debian.org --max-time 10 >/dev/null 2>&1; then
@@ -104,6 +106,13 @@ fi
 
 echo -n "Testing DNS resolution (should work): "
 if getent hosts debian.org >/dev/null 2>&1; then
+  echo -e "${GREEN}OK${RESET}"
+else
+  echo -e "${RED}FAIL${RESET}"
+fi
+
+echo -n "Testing ICMP (ping 8.8.8.8, should work): "
+if ping -c1 -W1 8.8.8.8 >/dev/null 2>&1; then
   echo -e "${GREEN}OK${RESET}"
 else
   echo -e "${RED}FAIL${RESET}"
