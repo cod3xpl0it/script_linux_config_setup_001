@@ -7,6 +7,9 @@
 
 set -euo pipefail
 
+# Ensure /sbin and /usr/sbin are in PATH (needed for iptables and system tools)
+export PATH=$PATH:/sbin:/usr/sbin
+
 log() { echo -e "[*] $*"; }
 
 if [ "$(id -u)" -ne 0 ]; then
