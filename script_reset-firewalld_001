@@ -1,18 +1,33 @@
 #!/bin/bash
-# Script to clear all firewalld configurations
-# Make sure to run as root
+# Reset firewalld to its factory default state
+# Must be run as root
 
-echo "Resetting firewalld to default state..."
+echo "Resetting firewalld to factory defaults..."
 
-# Reset the default zone
-firewall-cmd --permanent --reset-default-zone
+# Check if firewalld is installed
+if ! command -v firewall-cmd &> /dev/null; then
+  echo "Error: firewalld is not installed on this system."
+  exit 1
+fi
 
-# Reload the firewall
-firewall-cmd --complete-reload
-firewall-cmd --reload
+# Stop firewalld service
+echo "Stopping firewalld..."
+systemctl stop firewalld
 
-# Show final status
+# Remove all persistent configurations
+echo "Removing firewalld configuration files..."
+rm -rf /etc/firewalld
+
+# Start firewalld again
+echo "Starting firewalld..."
+systemctl start firewalld
+
+# Reload configuration
+echo "Reloading firewalld..."
+firewall-cmd --reload > /dev/null 2>&1
+
+# Display the default configuration
 echo "Current firewalld configuration:"
 firewall-cmd --list-all
 
-echo "Firewalld has been reset successfully!"
+echo "Firewalld has been successfully reset to default settings!"
