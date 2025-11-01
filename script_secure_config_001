@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # secure-minimal.sh
-# Run as root (sudo ./secure-minimal.sh)
+# Run as root: sudo ./secure-minimal.sh
 # Goal: make Debian minimal and secure
 # Blocks all traffic except HTTPS, DNS, DHCP, and ICMP
 # Enables AppArmor, automatic updates, auditd, fail2ban, and removes weak services
+# Safe: preserves SSH access if you are connected via SSH
 
 set -euo pipefail
 
@@ -15,65 +16,129 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 ############################################
+# 0) Safety: detect if running over SSH
+############################################
+SSH_ACTIVE=false
+# Check environment variables commonly set for SSH sessions
+if [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_CLIENT:-}" ] || [ -n "${SSH_TTY:-}" ]; then
+  SSH_ACTIVE=true
+fi
+
+############################################
 # 1) Update and install needed packages
 ############################################
 log "Updating system and installing security tools..."
 export DEBIAN_FRONTEND=noninteractive
 apt update -y
 apt upgrade -y
-apt install -y firewalld unattended-upgrades apt-listchanges auditd fail2ban apparmor apparmor-utils bash-completion curl nmap
+apt install -y --no-install-recommends firewalld unattended-upgrades apt-listchanges auditd fail2ban apparmor apparmor-utils bash-completion curl nmap iproute2 procps
 
 ############################################
-# 2) Configure firewall (firewalld)
+# 2) Configure firewall (firewalld) - corrected & safe
 ############################################
 log "Configuring firewalld..."
-
 systemctl enable --now firewalld
 
-# Create a clean custom zone
+# Create or reset custom zone 'secure'
 if ! firewall-cmd --get-zones | grep -qw secure; then
-  firewall-cmd --permanent --new-zone=secure
+    firewall-cmd --permanent --new-zone=secure
 fi
 
-log "Setting default zone to 'secure'..."
+log "Clearing existing services/ports/rules from 'secure' zone (permanent)..."
+# remove services
+for svc in $(firewall-cmd --zone=secure --list-services); do
+  firewall-cmd --permanent --zone=secure --remove-service="$svc" || true
+done
+# remove ports
+for p in $(firewall-cmd --zone=secure --list-ports); do
+  firewall-cmd --permanent --zone=secure --remove-port="$p" || true
+done
+# remove rich rules (best-effort: iterate lines)
+existing_rich=$(firewall-cmd --zone=secure --list-rich-rules)
+if [ -n "$existing_rich" ]; then
+  while IFS= read -r rr; do
+    [ -n "$rr" ] && firewall-cmd --permanent --zone=secure --remove-rich-rule="$rr" || true
+  done <<<"$existing_rich"
+fi
+
+log "Setting 'secure' as default zone (runtime + permanent)..."
+firewall-cmd --permanent --set-default-zone=secure
 firewall-cmd --set-default-zone=secure
 
-# Block everything by default in this zone
+log "Setting zone target to DROP (permanent)..."
 firewall-cmd --permanent --zone=secure --set-target=DROP
 
-# Allow loopback (local)
+# Allow loopback in zone (not strictly necessary but explicit)
 firewall-cmd --permanent --zone=secure --add-interface=lo
 
-# Allow only required traffic
-log "Allowing only HTTPS, DNS, DHCP, and ICMP..."
+# Allow required services (permanent)
+log "Allowing HTTPS, DNS, DHCP services in 'secure' zone..."
 firewall-cmd --permanent --zone=secure --add-service=https
 firewall-cmd --permanent --zone=secure --add-service=dns
+# DHCP server/client names vary; add common ones
 firewall-cmd --permanent --zone=secure --add-service=dhcp
-firewall-cmd --permanent --zone=secure --add-icmp-block-inversion=no
+firewall-cmd --permanent --zone=secure --add-service=dhcpv6-client
+
+# Allow ICMP via rich rule (accept common ICMP types)
 firewall-cmd --permanent --zone=secure --add-rich-rule='rule protocol value="icmp" accept'
 
-# Reload and show status
+# If user is connected via SSH, keep SSH allowed to avoid locking out
+if [ "$SSH_ACTIVE" = true ]; then
+  log "SSH session detected — keeping SSH allowed in 'secure' zone to avoid lockout."
+  firewall-cmd --permanent --zone=secure --add-service=ssh
+fi
+
+# Detect primary interface used for internet (best-effort)
+PRIMARY_IFACE=""
+if command -v ip >/dev/null 2>&1; then
+  PRIMARY_IFACE=$(ip route get 8.8.8.8 2>/dev/null | awk '/dev/ {for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n1 || true)
+fi
+
+if [ -n "$PRIMARY_IFACE" ]; then
+  log "Applying zone 'secure' to primary interface: $PRIMARY_IFACE"
+  firewall-cmd --permanent --zone=secure --change-interface="$PRIMARY_IFACE"
+else
+  log "Primary interface not detected; applying 'secure' to all non-loopback interfaces as fallback."
+  for iface in $(ip -o link show | awk -F': ' '{print $2}' | grep -v lo); do
+    firewall-cmd --permanent --zone=secure --add-interface="$iface" || true
+  done
+fi
+
+# Reload and display status
+log "Reloading firewalld..."
 firewall-cmd --reload
+log "Active zones:"
 firewall-cmd --get-active-zones
+log "Secure zone rules:"
 firewall-cmd --zone=secure --list-all
 
 ############################################
 # 3) Disable and remove unneeded services
 ############################################
-log "Disabling and removing unnecessary services..."
-for svc in ssh avahi-daemon cups bluetooth rpcbind; do
-  systemctl disable --now "$svc".service 2>/dev/null || true
+log "Disabling and removing unnecessary services (best-effort)..."
+for svc in avahi-daemon cups bluetooth rpcbind; do
+  systemctl disable --now "$svc" 2>/dev/null || true
 done
 
-apt purge -y avahi-daemon cups telnet ftp rpcbind openssh-server 2>/dev/null || true
+# If SSH is active, do NOT purge openssh-server automatically
+if [ "$SSH_ACTIVE" = true ]; then
+  log "SSH is active — skipping removal of openssh-server to avoid lockout. You can remove it later if desired."
+else
+  log "No SSH session detected — removing openssh-server and other unneeded packages."
+  systemctl disable --now ssh 2>/dev/null || true
+  apt purge -y avahi-daemon cups telnet ftp rpcbind openssh-server || true
+fi
+
 apt autoremove -y
 apt autoclean -y
 
 ############################################
-# 4) Disable SSH (you don’t use it)
+# 4) Disable SSH service if no active SSH detected (already handled) - keep explicit attempt
 ############################################
-log "Making sure SSH is disabled..."
-systemctl disable --now ssh 2>/dev/null || true
+if [ "$SSH_ACTIVE" = false ]; then
+  log "Disabling ssh service (no SSH session detected)..."
+  systemctl disable --now ssh 2>/dev/null || true
+fi
 
 ############################################
 # 5) Enable automatic security updates
@@ -84,7 +149,16 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 EOF
 
-cat >/etc/apt/apt.conf.d/50unattended-upgrades <<'EOF'
+# Use variable expansion safely for distribution ID/codename via /etc/os-release if available
+distro_id="Debian"
+distro_codename="stable"
+if [ -f /etc/os-release ]; then
+  . /etc/os-release
+  distro_id=${ID:-$distro_id}
+  distro_codename=${VERSION_CODENAME:-$distro_codename}
+fi
+
+cat >/etc/apt/apt.conf.d/50unattended-upgrades <<EOF
 Unattended-Upgrade::Allowed-Origins {
     "${distro_id}:${distro_codename}-security";
 };
@@ -95,13 +169,13 @@ EOF
 systemctl enable --now unattended-upgrades || true
 
 ############################################
-# 6) Enable AppArmor, audit logs, and fail2ban
+# 6) Enable AppArmor, auditd, and fail2ban
 ############################################
 log "Enabling AppArmor..."
-systemctl enable --now apparmor
+systemctl enable --now apparmor || true
 
 log "Enabling auditd (system logging)..."
-systemctl enable --now auditd
+systemctl enable --now auditd || true
 
 log "Enabling fail2ban..."
 systemctl enable --now fail2ban || true
@@ -113,6 +187,8 @@ bantime = 3600
 findtime = 600
 maxretry = 5
 EOF
+
+systemctl restart fail2ban || true
 
 ############################################
 # 7) Secure network kernel settings
@@ -134,15 +210,20 @@ sysctl --system >/dev/null || true
 # 8) Done
 ############################################
 log "System hardening complete!"
-echo "- Firewall blocks all except HTTPS (443), DNS (53), DHCP (67/68) and ICMP"
-echo "- SSH disabled and removed"
+echo "- Firewall: blocks all except HTTPS (443), DNS (53), DHCP (67/68 & dhcpv6-client) and ICMP"
+if [ "$SSH_ACTIVE" = true ]; then
+  echo "- SSH: left enabled to avoid locking out your current connection (you can remove it later)"
+else
+  echo "- SSH: disabled/removed (no SSH session detected)"
+fi
 echo "- Automatic security updates enabled"
 echo "- AppArmor, auditd, and fail2ban active"
-echo "- Extra services disabled"
+echo "- Extra services disabled where possible"
 
+# Offer reboot
 read -rp "Reboot now? (y/N): " REBOOT
 if [[ "$REBOOT" =~ ^[yY]$ ]]; then
   reboot
 else
-  echo "Reboot later to apply all changes."
+  echo "Reboot later to apply all changes fully."
 fi
