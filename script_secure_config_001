@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# secure-minimal-iptables-forcando-sbin.sh
+# secure-minimal-iptables-sbin.sh
 # Run as root: sudo bash $0
 
 set -euo pipefail
@@ -24,11 +24,11 @@ find_cmd() {
 log() { echo -e "[*] $*"; }
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "Run as root. Example: sudo bash $0"
+  echo "You must run this script as root. Example: sudo bash $0"
   exit 1
 fi
 
-# Detectar comandos essenciais
+# Detect essential commands
 IPTABLES=$(find_cmd iptables) || { echo "iptables not found"; exit 1; }
 NETFILTER_PERSISTENT=$(find_cmd netfilter-persistent) || true
 APT=$(find_cmd apt) || { echo "apt not found"; exit 1; }
@@ -40,8 +40,8 @@ NMAP=$(find_cmd nmap) || true
 
 export PATH=/sbin:/usr/sbin:$PATH
 
-# Pergunta antes de tudo sobre HTTP
-read -rp "Deseja bloquear HTTP (porta 80)? (y/N): " BLOCK_HTTP
+# Ask about HTTP blocking before anything else
+read -rp "Do you want to block HTTP (port 80)? (y/N): " BLOCK_HTTP
 
 log "Updating system and installing security tools..."
 export DEBIAN_FRONTEND=noninteractive
@@ -76,17 +76,18 @@ log "Configuring iptables firewall..."
 "$IPTABLES" -A INPUT -p tcp --dport 443 -j ACCEPT
 "$IPTABLES" -A OUTPUT -p tcp --dport 443 -j ACCEPT
 
-# Aplicar regra de HTTP com base na decisão do usuário
+# Apply HTTP rules based on user choice
 if [[ "${BLOCK_HTTP}" =~ ^[yY]$ ]]; then
     "$IPTABLES" -A INPUT -p tcp --dport 80 -j REJECT
     "$IPTABLES" -A OUTPUT -p tcp --dport 80 -j REJECT
-    log "HTTP bloqueado."
+    log "HTTP is blocked."
 else
     "$IPTABLES" -A INPUT -p tcp --dport 80 -j ACCEPT
     "$IPTABLES" -A OUTPUT -p tcp --dport 80 -j ACCEPT
-    log "HTTP permitido."
+    log "HTTP is allowed."
 fi
 
+# Save rules
 if [ -n "${NETFILTER_PERSISTENT:-}" ] && "$NETFILTER_PERSISTENT" --version >/dev/null 2>&1; then
     "$NETFILTER_PERSISTENT" save || true
 else
@@ -158,14 +159,14 @@ EOF
 "$SYSCTL" --system >/dev/null || true
 
 log "System hardening complete!"
-echo "- Firewall: blocks all exceto HTTPS (443), DNS (53), DHCP (67/68) e ICMP"
-echo "- HTTP: $( [[ "${BLOCK_HTTP}" =~ ^[yY]$ ]] && echo "bloqueado" || echo "permitido" )"
+echo "- Firewall: blocks all except HTTPS (443), DNS (53), DHCP (67/68), and ICMP"
+echo "- HTTP: $( [[ "${BLOCK_HTTP}" =~ ^[yY]$ ]] && echo "blocked" || echo "allowed" )"
 echo "- SSH: disabled/removed"
 echo "- Automatic security updates enabled"
 echo "- AppArmor, auditd, and fail2ban active"
 echo "- Extra services disabled"
 
-read -rp "Reboot now? (y/N): " REBOOT
+read -rp "Do you want to reboot now? (y/N): " REBOOT
 if [[ "${REBOOT}" =~ ^[yY]$ ]]; then
   if [ -n "${REBOOT_CMD:-}" ]; then
     "$REBOOT_CMD"
