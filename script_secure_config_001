@@ -1,180 +1,106 @@
-#!/usr/bin/env bash
-# secure-minimal-iptables-sbin.sh
-# Run as root: sudo bash $0
+#!/bin/bash
 
-set -euo pipefail
-
-find_cmd() {
-  local cmd="$1"
-  if [ -x "/sbin/$cmd" ]; then
-    printf "%s" "/sbin/$cmd"
-    return 0
-  fi
-  if [ -x "/usr/sbin/$cmd" ]; then
-    printf "%s" "/usr/sbin/$cmd"
-    return 0
-  fi
-  if command -v "$cmd" >/dev/null 2>&1; then
-    command -v "$cmd"
-    return 0
-  fi
-  return 1
-}
-
-log() { echo -e "[*] $*"; }
-
-if [ "$(id -u)" -ne 0 ]; then
-  echo "You must run this script as root. Example: sudo bash $0"
-  exit 1
-fi
-
-export DEBIAN_FRONTEND=noninteractive
-export PATH=/sbin:/usr/sbin:$PATH
-
-log "Atualizando sistema e instalando ferramentas essenciais..."
+# Update the system
+echo "Updating the system..."
 apt update -y
 apt upgrade -y
-apt install -y --no-install-recommends \
-iptables netfilter-persistent sysvinit-utils \
-unattended-upgrades apt-listchanges auditd fail2ban \
-apparmor apparmor-utils bash-completion curl nmap iproute2 procps
 
+# Install essential tools
+echo "Installing essential tools..."
+apt install -y iptables netfilter-persistent sysvinit-utils \
+unattended-upgrades apt-listchanges auditd fail2ban apparmor \
+apparmor-utils bash-completion curl nmap iproute2 procps
 
-# Recarregar comandos detectáveis
-IPTABLES=$(find_cmd iptables) || { echo "iptables não encontrado"; exit 1; }
-NETFILTER_PERSISTENT=$(find_cmd netfilter-persistent) || true
-SYSTEMCTL=$(find_cmd systemctl) || { echo "systemctl não encontrado"; exit 1; }
-SYSCTL=$(find_cmd sysctl) || { echo "sysctl não encontrado"; exit 1; }
-REBOOT_CMD=$(find_cmd reboot) || true
+# Configure the firewall (iptables)
+echo "Configuring the firewall..."
 
-log "Configurando iptables..."
-# Flush existing rules
-"$IPTABLES" -F
-"$IPTABLES" -X
-"$IPTABLES" -t nat -F
-"$IPTABLES" -t nat -X
-"$IPTABLES" -t mangle -F
-"$IPTABLES" -t mangle -X
-"$IPTABLES" -t raw -F
-"$IPTABLES" -t raw -X
+# Clear old iptables rules
+iptables -F
+iptables -X
+iptables -t nat -F
+iptables -t mangle -F
+iptables -t raw -F
 
-# Default policies
-"$IPTABLES" -P INPUT DROP
-"$IPTABLES" -P FORWARD DROP
-"$IPTABLES" -P OUTPUT DROP
+# Set default policies to DROP
+iptables -P INPUT DROP
+iptables -P FORWARD DROP
+iptables -P OUTPUT DROP
 
-# Loopback
-"$IPTABLES" -A INPUT -i lo -j ACCEPT
-"$IPTABLES" -A OUTPUT -o lo -j ACCEPT
+# Allow loopback traffic (localhost)
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A OUTPUT -o lo -j ACCEPT
 
-# Established connections
-"$IPTABLES" -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-"$IPTABLES" -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+# Allow established connections
+iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-# ICMP
-"$IPTABLES" -A INPUT -p icmp -j ACCEPT
-"$IPTABLES" -A OUTPUT -p icmp -j ACCEPT
+# Allow ICMP (ping)
+iptables -A INPUT -p icmp -j ACCEPT
+iptables -A OUTPUT -p icmp -j ACCEPT
 
-# DNS
-"$IPTABLES" -A INPUT -p udp --dport 53 -j ACCEPT
-"$IPTABLES" -A INPUT -p tcp --dport 53 -j ACCEPT
-"$IPTABLES" -A OUTPUT -p udp --dport 53 -j ACCEPT
-"$IPTABLES" -A OUTPUT -p tcp --dport 53 -j ACCEPT
+# Allow DNS (port 53 UDP/TCP)
+iptables -A INPUT -p udp --dport 53 -j ACCEPT
+iptables -A INPUT -p tcp --dport 53 -j ACCEPT
+iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
 
-# DHCP
-"$IPTABLES" -A INPUT -p udp --dport 67:68 -j ACCEPT
-"$IPTABLES" -A OUTPUT -p udp --dport 67:68 -j ACCEPT
+# Allow DHCP (ports 67-68 UDP)
+iptables -A INPUT -p udp --dport 67:68 -j ACCEPT
+iptables -A OUTPUT -p udp --dport 67:68 -j ACCEPT
 
-# HTTPS
-"$IPTABLES" -A INPUT -p tcp --dport 443 -j ACCEPT
-"$IPTABLES" -A OUTPUT -p tcp --dport 443 -j ACCEPT
+# Allow HTTP (port 80)
+iptables -A INPUT -p tcp --dport 80 -j ACCEPT
+iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
 
-# HTTP (sempre permitido)
-"$IPTABLES" -A INPUT -p tcp --dport 80 -j ACCEPT
-"$IPTABLES" -A OUTPUT -p tcp --dport 80 -j ACCEPT
-log "HTTP liberado (porta 80)."
+# Allow HTTPS (port 443)
+iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
 
-# Salvar regras imediatamente
-if [ -n "${NETFILTER_PERSISTENT:-}" ] && "$NETFILTER_PERSISTENT" --version >/dev/null 2>&1; then
-    "$NETFILTER_PERSISTENT" save || true
-else
-    apt install -y netfilter-persistent
-    NETFILTER_PERSISTENT=$(find_cmd netfilter-persistent) || true
-    [ -n "${NETFILTER_PERSISTENT:-}" ] && "$NETFILTER_PERSISTENT" save || true
-fi
+# Save iptables rules
+netfilter-persistent save
 
-"$IPTABLES" -L -v --line-numbers
+# Disable unnecessary services
+echo "Disabling unnecessary services..."
+systemctl disable --now avahi-daemon cups bluetooth rpcbind ssh
 
-# Serviços de segurança e hardening
-log "Desativando serviços desnecessários..."
-for svc in avahi-daemon cups bluetooth rpcbind ssh; do
-  "$SYSTEMCTL" disable --now "$svc" 2>/dev/null || true
-done
-
-apt purge -y avahi-daemon cups telnet ftp rpcbind openssh-server || true
+# Remove unnecessary packages
+apt purge -y avahi-daemon cups telnet ftp rpcbind openssh-server
 apt autoremove -y
 apt autoclean -y
 
-log "Configurando atualizações automáticas..."
-cat >/etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
-APT::Periodic::Update-Package-Lists "1";
-APT::Periodic::Unattended-Upgrade "1";
-EOF
+# Enable automatic updates
+echo "Configuring automatic updates..."
 
-distro_id="Debian"
-distro_codename="stable"
-[ -f /etc/os-release ] && . /etc/os-release && distro_id=${ID:-$distro_id} && distro_codename=${VERSION_CODENAME:-$distro_codename}
+# Periodic update configuration
+echo 'APT::Periodic::Update-Package-Lists "1";' > /etc/apt/apt.conf.d/20auto-upgrades
+echo 'APT::Periodic::Unattended-Upgrade "1";' >> /etc/apt/apt.conf.d/20auto-upgrades
 
-cat >/etc/apt/apt.conf.d/50unattended-upgrades <<EOF
-Unattended-Upgrade::Allowed-Origins {
-    "${distro_id}:${distro_codename}-security";
-};
-Unattended-Upgrade::Automatic-Reboot "false";
-Unattended-Upgrade::Remove-Unused-Dependencies "true";
-EOF
+# Allow only security updates
+echo 'Unattended-Upgrade::Allowed-Origins {' > /etc/apt/apt.conf.d/50unattended-upgrades
+echo '    "Debian:stable-security";' >> /etc/apt/apt.conf.d/50unattended-upgrades
+echo '};' >> /etc/apt/apt.conf.d/50unattended-upgrades
+echo 'Unattended-Upgrade::Automatic-Reboot "false";' >> /etc/apt/apt.conf.d/50unattended-upgrades
+echo 'Unattended-Upgrade::Remove-Unused-Dependencies "true";' >> /etc/apt/apt.conf.d/50unattended-upgrades
 
-"$SYSTEMCTL" enable --now unattended-upgrades || true
-"$SYSTEMCTL" enable --now apparmor || true
-"$SYSTEMCTL" enable --now auditd || true
-"$SYSTEMCTL" enable --now fail2ban || true
+# Enable the automatic updates service
+systemctl enable --now unattended-upgrades
 
-cat >/etc/fail2ban/jail.d/local.conf <<'EOF'
-[DEFAULT]
-bantime = 3600
-findtime = 600
-maxretry = 5
-EOF
+# Apply kernel hardening
+echo "Applying kernel hardening..."
 
-"$SYSTEMCTL" restart fail2ban || true
+# Kernel security configurations
+echo 'net.ipv4.conf.all.accept_redirects = 0' > /etc/sysctl.d/99-secure-network.conf
+echo 'net.ipv4.conf.all.send_redirects = 0' >> /etc/sysctl.d/99-secure-network.conf
+echo 'net.ipv4.conf.default.accept_redirects = 0' >> /etc/sysctl.d/99-secure-network.conf
+echo 'net.ipv4.conf.default.send_redirects = 0' >> /etc/sysctl.d/99-secure-network.conf
+echo 'net.ipv4.conf.all.accept_source_route = 0' >> /etc/sysctl.d/99-secure-network.conf
+echo 'net.ipv6.conf.all.accept_source_route = 0' >> /etc/sysctl.d/99-secure-network.conf
+echo 'net.ipv4.tcp_syncookies = 1' >> /etc/sysctl.d/99-secure-network.conf
+echo 'net.ipv4.conf.all.rp_filter = 1' >> /etc/sysctl.d/99-secure-network.conf
 
-log "Aplicando hardening do kernel..."
-cat >/etc/sysctl.d/99-secure-network.conf <<'EOF'
-net.ipv4.conf.all.accept_redirects = 0
-net.ipv4.conf.all.send_redirects = 0
-net.ipv4.conf.default.accept_redirects = 0
-net.ipv4.conf.default.send_redirects = 0
-net.ipv4.conf.all.accept_source_route = 0
-net.ipv6.conf.all.accept_source_route = 0
-net.ipv4.tcp_syncookies = 1
-net.ipv4.conf.all.rp_filter = 1
-EOF
+# Apply the changes
+sysctl --system
 
-"$SYSCTL" --system >/dev/null || true
-
-log "Hardening completo!"
-echo "- Firewall: bloqueia tudo exceto HTTP (80), HTTPS (443), DNS (53), DHCP (67/68) e ICMP"
-echo "- SSH: desativado/removido"
-echo "- Atualizações automáticas habilitadas"
-echo "- AppArmor, auditd e fail2ban ativos"
-echo "- Serviços extras desativados"
-
-read -rp "Deseja reiniciar agora? (y/N): " REBOOT
-if [[ "${REBOOT}" =~ ^[yY]$ ]]; then
-  if [ -n "${REBOOT_CMD:-}" ]; then
-    "$REBOOT_CMD"
-  else
-    "$SYSTEMCTL" reboot || true
-  fi
-else
-  echo "Reinicie depois para aplicar todas as mudanças."
-fi
+# Reboot the system (optional)
+echo "Rebooting the system to apply all changes..."
+reboot
