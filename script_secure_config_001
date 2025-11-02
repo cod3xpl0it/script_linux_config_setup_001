@@ -24,7 +24,7 @@ apt dist-upgrade -y
 # 2) Install essential packages
 echo -e "${GREEN}Installing essential packages...${NC}"
 apt install -y nftables unattended-upgrades apt-listchanges auditd fail2ban apparmor \
-apparmor-utils bash-completion curl nmap iproute2 procps sudo wget
+apparmor-utils bash-completion curl nmap iproute2 procps
 
 # -----------------------------
 # 3) Configure nftables firewall
