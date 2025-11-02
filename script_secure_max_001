@@ -18,14 +18,14 @@ apt dist-upgrade -y
 # 2) Install essential packages
 # ----------------------------
 echo "[2/10] Installing essential security packages..."
-apt install -y sudo wget curl bash-completion iptables-persistent nftables \
-auditd fail2ban apparmor apparmor-utils ufw net-tools iproute2 nmap
+apt install -y sudo wget curl bash-completion iptables-persistent netfilter-persistent \
+auditd fail2ban apparmor apparmor-utils nftables net-tools iproute2 nmap
 
 # ----------------------------
-# 3) Configure firewall (nftables/iptables)
+# 3) Configure firewall (iptables)
 # ----------------------------
 echo "[3/10] Configuring firewall..."
-# Flush rules
+# Flush old rules
 iptables -F
 iptables -X
 iptables -t nat -F
@@ -45,7 +45,7 @@ iptables -A OUTPUT -o lo -j ACCEPT
 iptables -A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
 iptables -A OUTPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
 
-# Allow common services
+# Allow essential services
 iptables -A INPUT -p udp --dport 53 -j ACCEPT   # DNS
 iptables -A INPUT -p tcp --dport 53 -j ACCEPT
 iptables -A INPUT -p tcp --dport 80 -j ACCEPT   # HTTP
@@ -55,7 +55,7 @@ iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
 iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
 iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
 
-# Save rules
+# Save rules permanently
 netfilter-persistent save
 netfilter-persistent reload
 
@@ -128,7 +128,7 @@ EOF
 systemctl restart auditd
 
 # ----------------------------
-# 8) Configure Fail2Ban for all common services
+# 8) Configure Fail2Ban for multiple services
 # ----------------------------
 echo "[8/10] Configuring Fail2Ban..."
 cat <<EOF > /etc/fail2ban/jail.local
@@ -194,8 +194,7 @@ done
 systemctl restart apparmor
 
 # ----------------------------
-# 10) Final checks
+# 10) Final message
 # ----------------------------
 echo "[10/10] Hardening complete. System reboot recommended."
 echo "Firewall, auditd, Fail2Ban, AppArmor, automatic updates and kernel hardening applied."
-
