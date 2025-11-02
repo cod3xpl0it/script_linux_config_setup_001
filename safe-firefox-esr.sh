@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Script to run Firefox ESR fully isolated
-
+# Script to install and configure a fully isolated Firefox ESR sandbox
 SANDBOX_USER="firefox_sandbox"
 SANDBOX_HOME="/var/lib/firefox_sandbox"
 LAUNCHER="/usr/local/bin/safe-firefox-esr"
@@ -49,7 +48,6 @@ write_apparmor_profile() {
 #include <tunables/global>
 
 profile /usr/lib/firefox-esr/firefox-esr flags=(attach_disconnected,mediate_deleted) {
-
   /usr/lib/firefox-esr/firefox-esr ix,
   /usr/lib/firefox-esr/** r,
   /usr/lib/x86_64-linux-gnu/** r,
@@ -114,27 +112,28 @@ write_launcher() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-SANDBOX_USER="firefox_sandbox"
+# Safe Firefox ESR launcher (no sudo required)
 FIREFOX_BIN="/usr/lib/firefox-esr/firefox-esr"
 
+# Cria diretório temporário isolado para HOME
 TMPHOME=$(mktemp -d /tmp/firefox_home.XXXXXX)
 chmod 0700 "$TMPHOME"
 
-if [ "$(id -u)" -eq 0 ]; then
-  chown "$(id -u $SANDBOX_USER):$(id -g $SANDBOX_USER)" "$TMPHOME"
-  su -s /bin/sh -c "env HOME='$TMPHOME' firejail --private='$TMPHOME' --seccomp --caps.drop=all --private-dev --quiet -- '$FIREFOX_BIN' $*" "$SANDBOX_USER"
-else
-  sudo chown "$(id -u $SANDBOX_USER):$(id -g $SANDBOX_USER)" "$TMPHOME"
-  sudo -u "$SANDBOX_USER" env HOME="$TMPHOME" \
-    firejail --private="$TMPHOME" --seccomp --caps.drop=all --private-dev --quiet -- "$FIREFOX_BIN" "$@"
-fi
+# Executa Firefox isolado dentro do Firejail, usando TMPHOME como HOME
+firejail --private="$TMPHOME" \
+         --seccomp \
+         --caps.drop=all \
+         --private-dev \
+         --quiet \
+         -- "$FIREFOX_BIN" "$@"
 
+# Remove o diretório temporário
 rm -rf "$TMPHOME"
 echo "Temporary HOME removed."
 EOF
 
   chmod +x "$LAUNCHER"
-  echo "Launcher created. Run it with: $LAUNCHER"
+  echo "Launcher criado. Execute como usuário normal: $LAUNCHER"
 }
 
 print_notes() {
@@ -142,19 +141,19 @@ print_notes() {
 
 NOTES:
 
-1) Run launcher as your normal user.
-2) Firefox runs isolated. No access to /home or other apps.
-3) Temporary home is removed after exit.
-4) X11 can see keys. Wayland is safer.
-5) Store passwords encrypted. Do not leave plaintext in /home.
-6) To restore original AppArmor profile, use backup in /etc/apparmor.d/backup-XXXX
+1) Run launcher as your normal user (do NOT use sudo).
+2) Firefox runs fully isolated — no access to /home or other files.
+3) Temporary home is removed automatically after exit.
+4) For more security, use Wayland instead of X11.
+5) Passwords should be stored securely, not in plain text.
+6) To restore the original AppArmor profile, see /etc/apparmor.d/backup-XXXX
 7) To remove sandbox: sudo userdel -r firefox_sandbox
 8) To remove launcher: sudo rm -f /usr/local/bin/safe-firefox-esr
 
 EOF
 }
 
-# Run steps
+# Run setup
 require_root
 install_packages
 create_sandbox_user
@@ -164,4 +163,4 @@ load_and_enforce_profile
 write_launcher
 print_notes
 
-echo "Setup complete. Run '$LAUNCHER' to open Firefox ESR isolated."
+echo "Setup complete. Run 'safe-firefox-esr' as your normal user to open Firefox ESR isolated."
