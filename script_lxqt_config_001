@@ -4,8 +4,8 @@
 apt update
 apt upgrade -y
 
-# Install the LXQt desktop environment without recommended packages
-apt install -y lxqt --no-install-recommends
+# Install the LXQt Core desktop
+apt install -y lxqt-core
 
 # Install the LightDM display manager
 apt install -y lightdm
