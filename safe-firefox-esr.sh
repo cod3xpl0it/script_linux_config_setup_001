@@ -28,7 +28,7 @@ create_sandbox_user() {
     echo "Sandbox user exists."
   else
     echo "Creating sandbox user..."
-    useradd -m -d "$SANDBOX_HOME" -s /usr/sbin/nologin "$SANDBOX_USER"
+    /sbin/useradd -m -d "$SANDBOX_HOME" -s /usr/sbin/nologin "$SANDBOX_USER"
     passwd -l "$SANDBOX_USER" >/dev/null 2>&1 || true
     chown root:root "$SANDBOX_HOME"
     chmod 0755 "$SANDBOX_HOME"
@@ -102,9 +102,9 @@ EOF
 
 load_and_enforce_profile() {
   echo "Loading AppArmor profile..."
-  apparmor_parser -r "$APPARMOR_PROFILE"
+  /sbin/apparmor_parser -r "$APPARMOR_PROFILE"
   if command -v aa-enforce >/dev/null 2>&1; then
-    aa-enforce /usr/lib/firefox-esr/firefox-esr || true
+    /sbin/aa-enforce /usr/lib/firefox-esr/firefox-esr || true
   fi
 }
 
