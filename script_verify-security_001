@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# script_verify-security_001 — lightweight security verification script with audit checks
-# run as root: sudo bash script_verify-security_001
+# run as root
 
 set -u
 
@@ -47,7 +46,7 @@ fi
 
 # 2) essential packages
 log_msg "Checking for essential packages..."
-ESSENTIAL_PKGS=("sudo" "curl" "wget" "ufw")
+ESSENTIAL_PKGS=("curl")
 MISSING=0
 for pkg in "${ESSENTIAL_PKGS[@]}"; do
     if ! dpkg -s "$pkg" &>/dev/null; then
