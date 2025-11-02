@@ -1,6 +1,5 @@
 #!/bin/bash
-# security_hardening_nftables.sh — full system security hardening with persistent nftables firewall
-# Run as root: sudo bash security_hardening_nftables.sh
+# Run as root
 
 set -e
 
