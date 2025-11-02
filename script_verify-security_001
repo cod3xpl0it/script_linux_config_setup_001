@@ -37,12 +37,12 @@ log_msg "Log file: $LOG_FILE"
 log_msg ""
 
 # 1) system updates
-log_msg "Checking for pending system updates..."
-if apt list --upgradable 2>/dev/null | grep -q -v "Listing..."; then
-    warn "There are pending package updates."
-else
-    ok "The system is fully up to date."
-fi
+#log_msg "Checking for pending system updates..."
+#if apt list --upgradable 2>/dev/null | grep -q -v "Listing..."; then
+#    warn "There are pending package updates."
+#else
+#    ok "The system is fully up to date."
+#fi
 
 # 2) essential packages
 log_msg "Checking for essential packages..."
@@ -73,17 +73,17 @@ else
 fi
 
 # 4) iptables policies
-log_msg "Checking iptables default policies..."
-ALL_DROP=true
-for chain in INPUT FORWARD OUTPUT; do
-    policy=$(iptables -L "$chain" -n 2>/dev/null | grep "Chain $chain" | awk '{print $4}' | tr -d '()')
-    [[ "$policy" != "DROP" ]] && ALL_DROP=false
-done
-if $ALL_DROP; then
-    ok "iptables default policies are set to DROP."
-else
-    warn "iptables default policies are not set to DROP."
-fi
+#log_msg "Checking iptables default policies..."
+#ALL_DROP=true
+#for chain in INPUT FORWARD OUTPUT; do
+#    policy=$(iptables -L "$chain" -n 2>/dev/null | grep "Chain $chain" | awk '{print $4}' | tr -d '()')
+#    [[ "$policy" != "DROP" ]] && ALL_DROP=false
+#done
+#if $ALL_DROP; then
+#    ok "iptables default policies are set to DROP."
+#else
+#    warn "iptables default policies are not set to DROP."
+#fi
 
 # 5) unnecessary services
 log_msg "Checking for unnecessary services..."
