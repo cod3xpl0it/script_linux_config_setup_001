@@ -1,105 +1,127 @@
 #!/bin/bash
+# security_hardening.sh — comprehensive security hardening script
+# Run as root: sudo bash security_hardening.sh
 
+set -e
+
+# -----------------------------
+# Color definitions
+GREEN="\033[0;32m"
+YELLOW="\033[1;33m"
+NC="\033[0m"
+
+# -----------------------------
 # Update the system
-echo "Updating the system..."
+echo -e "${GREEN}Updating the system...${NC}"
 apt update -y
 apt upgrade -y
-apt dist-upgrade -y  # Ensures dependencies are updated correctly
+apt dist-upgrade -y
 
+# -----------------------------
 # Install essential tools
-echo "Installing essential tools..."
+echo -e "${GREEN}Installing essential tools...${NC}"
 apt install -y iptables netfilter-persistent sysvinit-utils \
 unattended-upgrades apt-listchanges auditd fail2ban apparmor \
-apparmor-utils bash-completion curl nmap iproute2 procps
+apparmor-utils bash-completion curl nmap iproute2 procps sudo wget ufw
 
-# Configure the firewall (iptables)
-echo "Configuring the firewall..."
+# -----------------------------
+# Configure iptables firewall
+echo -e "${GREEN}Configuring iptables firewall...${NC}"
 
-# Flush old iptables rules
+# Flush existing rules
 iptables -F
 iptables -X
 iptables -t nat -F
 iptables -t mangle -F
 iptables -t raw -F
 
-# Set default policies to DROP (blocks all by default)
+# Set default policies
 iptables -P INPUT DROP
 iptables -P FORWARD DROP
-iptables -P OUTPUT DROP
+iptables -P OUTPUT ACCEPT  # safer for updates and DNS
 
-# Allow loopback traffic (localhost)
+# Allow loopback traffic
 iptables -A INPUT -i lo -j ACCEPT
 iptables -A OUTPUT -o lo -j ACCEPT
 
 # Allow established connections
-iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+iptables -A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
+iptables -A OUTPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
 
-# Allow ICMP (Ping) - optional, you can choose to block
-# iptables -A INPUT -p icmp -j ACCEPT
-# iptables -A OUTPUT -p icmp -j ACCEPT
+# Allow ICMP (Ping)
+iptables -A INPUT -p icmp -j ACCEPT
+iptables -A OUTPUT -p icmp -j ACCEPT
 
-# Allow DNS (Port 53 UDP/TCP) - necessary for name resolution
+# Allow DNS
 iptables -A INPUT -p udp --dport 53 -j ACCEPT
 iptables -A INPUT -p tcp --dport 53 -j ACCEPT
 iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
 iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
 
-# Allow HTTP (Port 80) - if the banking app or any site needs it
+# Allow HTTP/HTTPS
 iptables -A INPUT -p tcp --dport 80 -j ACCEPT
-iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
-
-# Allow HTTPS (Port 443) - necessary for secure connections
 iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
 iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
 
-# Save iptables rules
-netfilter-persistent save
+# Save rules persistently
+iptables-save > /etc/iptables/rules.v4
+netfilter-persistent reload
 
+# -----------------------------
 # Disable unnecessary services
-echo "Disabling unnecessary services..."
-systemctl disable --now avahi-daemon cups bluetooth rpcbind
+echo -e "${GREEN}Disabling unnecessary services...${NC}"
+systemctl disable --now avahi-daemon cups bluetooth rpcbind ufw
 
-# Uninstall unnecessary packages
-echo "Removing unnecessary packages..."
+# -----------------------------
+# Remove unnecessary packages
+echo -e "${GREEN}Removing unnecessary packages...${NC}"
 apt remove -y avahi-daemon cups telnet ftp rpcbind
 apt purge -y avahi-daemon cups telnet ftp rpcbind
 apt autoremove -y
 apt autoclean -y
 
+# -----------------------------
 # Configure automatic updates
-echo "Configuring automatic updates..."
+echo -e "${GREEN}Configuring automatic updates...${NC}"
 
 # Periodic update configuration
-echo 'APT::Periodic::Update-Package-Lists "1";' > /etc/apt/apt.conf.d/20auto-upgrades
-echo 'APT::Periodic::Unattended-Upgrade "1";' >> /etc/apt/apt.conf.d/20auto-upgrades
+cat <<EOF > /etc/apt/apt.conf.d/20auto-upgrades
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+EOF
 
-# Allow only security updates
-echo 'Unattended-Upgrade::Allowed-Origins {' > /etc/apt/apt.conf.d/50unattended-upgrades
-echo '    "Debian:stable-security";' >> /etc/apt/apt.conf.d/50unattended-upgrades
-echo '};' >> /etc/apt/apt.conf.d/50unattended-upgrades
-echo 'Unattended-Upgrade::Automatic-Reboot "false";' >> /etc/apt/apt.conf.d/50unattended-upgrades
-echo 'Unattended-Upgrade::Remove-Unused-Dependencies "true";' >> /etc/apt/apt.conf.d/50unattended-upgrades
+# Security-only upgrades
+cat <<EOF > /etc/apt/apt.conf.d/50unattended-upgrades
+Unattended-Upgrade::Allowed-Origins {
+    "Debian:stable-security";
+};
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+EOF
 
-# Enable the automatic updates service
+# Enable service
 systemctl enable --now unattended-upgrades
 
-# Apply kernel hardening
-echo "Applying kernel hardening..."
+# -----------------------------
+# Kernel hardening
+echo -e "${GREEN}Applying kernel hardening...${NC}"
 
-# Kernel security configurations
-echo 'net.ipv4.conf.all.accept_redirects = 0' > /etc/sysctl.d/99-secure-network.conf
-echo 'net.ipv4.conf.all.send_redirects = 0' >> /etc/sysctl.d/99-secure-network.conf
-echo 'net.ipv4.conf.default.accept_redirects = 0' >> /etc/sysctl.d/99-secure-network.conf
-echo 'net.ipv4.conf.default.send_redirects = 0' >> /etc/sysctl.d/99-secure-network.conf
-echo 'net.ipv4.conf.all.accept_source_route = 0' >> /etc/sysctl.d/99-secure-network.conf
-echo 'net.ipv6.conf.all.accept_source_route = 0' >> /etc/sysctl.d/99-secure-network.conf
-echo 'net.ipv4.tcp_syncookies = 1' >> /etc/sysctl.d/99-secure-network.conf
-echo 'net.ipv4.conf.all.rp_filter = 1' >> /etc/sysctl.d/99-secure-network.conf
+cat <<EOF > /etc/sysctl.d/99-secure-network.conf
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv6.conf.all.accept_source_route = 0
+net.ipv4.tcp_syncookies = 1
+net.ipv4.conf.all.rp_filter = 1
+EOF
 
-# Apply sysctl changes
 sysctl --system
 
-# Reboot the system (optional)
-echo "Rebooting the system to apply all changes..."
-reboot
+# -----------------------------
+# Finished
+echo -e "${GREEN}Security hardening complete. Firewall rules saved and persistent.${NC}"
+echo -e "${GREEN}INPUT/ FORWARD policies: DROP, OUTPUT: ACCEPT${NC}"
+echo -e "${GREEN}Reboot recommended to ensure all changes take full effect.${NC}"
