@@ -21,6 +21,34 @@ echo "[2/10] Installing essential security packages..."
 apt install -y sudo wget curl bash-completion iptables-persistent netfilter-persistent \
 auditd fail2ban apparmor apparmor-utils nftables net-tools iproute2 nmap unattended-upgrades
 
+
+set -e
+
+echo "=== Stopping AppArmor ==="
+# Stop the AppArmor service before making changes
+systemctl stop apparmor
+
+echo "=== Removing all loaded profiles ==="
+# Remove all currently loaded profiles
+/sbin/apparmor_parser -R /etc/apparmor.d/* || true
+
+echo "=== Reinstalling AppArmor packages ==="
+# Reinstall the AppArmor packages to restore default profiles
+apt update
+apt install --reinstall -y apparmor apparmor-profiles apparmor-utils
+
+echo "=== Reloading default profiles ==="
+# Start the AppArmor service and reload default profiles
+systemctl start apparmor
+/sbin/apparmor_parser -r /etc/apparmor.d/* || true
+
+echo "=== Checking AppArmor status ==="
+# Display the current status of AppArmor and loaded profiles
+/sbin/apparmor_status
+
+echo "=== Reset complete! ==="
+
+
 # ----------------------------
 # 3) Configure firewall (iptables)
 # ----------------------------
@@ -189,7 +217,7 @@ systemctl restart fail2ban
 # ----------------------------
 echo "[9/10] Configuring AppArmor..."
 for profile in /etc/apparmor.d/*; do
-    aa-enforce "$profile" || true
+    /sbin/aa-enforce "$profile" || true
 done
 systemctl restart apparmor
 
