@@ -19,45 +19,45 @@ apt dist-upgrade -y
 # ----------------------------
 echo "[2/10] Installing essential security packages..."
 apt install -y sudo wget curl bash-completion iptables-persistent netfilter-persistent \
-auditd fail2ban apparmor apparmor-utils nftables net-tools iproute2 nmap
+auditd fail2ban apparmor apparmor-utils nftables net-tools iproute2 nmap unattended-upgrades
 
 # ----------------------------
 # 3) Configure firewall (iptables)
 # ----------------------------
 echo "[3/10] Configuring firewall..."
 # Flush old rules
-iptables -F
-iptables -X
-iptables -t nat -F
-iptables -t mangle -F
-iptables -t raw -F
+/sbin/iptables -F
+/sbin/iptables -X
+/sbin/iptables -t nat -F
+/sbin/iptables -t mangle -F
+/sbin/iptables -t raw -F
 
 # Set default policies
-iptables -P INPUT DROP
-iptables -P FORWARD DROP
-iptables -P OUTPUT ACCEPT
+/sbin/iptables -P INPUT DROP
+/sbin/iptables -P FORWARD DROP
+/sbin/iptables -P OUTPUT ACCEPT
 
 # Allow loopback
-iptables -A INPUT -i lo -j ACCEPT
-iptables -A OUTPUT -o lo -j ACCEPT
+/sbin/iptables -A INPUT -i lo -j ACCEPT
+/sbin/iptables -A OUTPUT -o lo -j ACCEPT
 
 # Allow established connections
-iptables -A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
-iptables -A OUTPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
+/sbin/iptables -A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
+/sbin/iptables -A OUTPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
 
 # Allow essential services
-iptables -A INPUT -p udp --dport 53 -j ACCEPT   # DNS
-iptables -A INPUT -p tcp --dport 53 -j ACCEPT
-iptables -A INPUT -p tcp --dport 80 -j ACCEPT   # HTTP
-iptables -A INPUT -p tcp --dport 443 -j ACCEPT  # HTTPS
-iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
-iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
-iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
-iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+/sbin/iptables -A INPUT -p udp --dport 53 -j ACCEPT   # DNS
+/sbin/iptables -A INPUT -p tcp --dport 53 -j ACCEPT
+/sbin/iptables -A INPUT -p tcp --dport 80 -j ACCEPT   # HTTP
+/sbin/iptables -A INPUT -p tcp --dport 443 -j ACCEPT  # HTTPS
+/sbin/iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+/sbin/iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
+/sbin/iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
+/sbin/iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
 
 # Save rules permanently
-netfilter-persistent save
-netfilter-persistent reload
+/sbin/netfilter-persistent save
+/sbin/netfilter-persistent reload
 
 # ----------------------------
 # 4) Disable unnecessary services
@@ -101,7 +101,7 @@ net.ipv4.tcp_syncookies = 1
 net.ipv4.conf.all.rp_filter = 1
 EOF
 
-sysctl --system
+/sbin/sysctl --system
 
 # ----------------------------
 # 7) Configure auditd
