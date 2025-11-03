@@ -9,9 +9,7 @@ APPARMOR_PROFILE="/etc/apparmor.d/usr.lib.firefox-esr.firefox-esr"
 BACKUP_DIR="/etc/apparmor.d/backup-$(date +%Y%m%d%H%M%S)"
 FIREFOX_BIN="/usr/lib/firefox-esr/firefox-esr"
 
-rm /usr/local/bin/safe-firefox-esr
-
-rm 
+#rm /usr/local/bin/safe-firefox-esr
 
 require_root() {
   if [ "$(id -u)" -ne 0 ]; then
