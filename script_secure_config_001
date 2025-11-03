@@ -1,0 +1,127 @@
+#!/bin/bash
+# Run as root
+
+set -e
+
+# -----------------------------
+# Color definitions
+GREEN="\033[0;32m"
+YELLOW="\033[1;33m"
+NC="\033[0m"
+
+# -----------------------------
+echo -e "${GREEN}Starting system security hardening...${NC}"
+
+# -----------------------------
+# 1) Update the system
+echo -e "${GREEN}Updating the system...${NC}"
+apt update -y
+apt upgrade -y
+apt dist-upgrade -y
+
+# -----------------------------
+# 2) Install essential packages
+echo -e "${GREEN}Installing essential packages...${NC}"
+apt install -y nftables unattended-upgrades apt-listchanges auditd fail2ban apparmor \
+apparmor-utils bash-completion curl nmap iproute2 procps
+
+# -----------------------------
+# 3) Configure nftables firewall
+echo -e "${GREEN}Configuring persistent nftables firewall...${NC}"
+
+# Flush existing rules
+nft flush ruleset
+
+# Create main table and chains
+nft add table inet filter
+nft add chain inet filter input  { type filter hook input priority 0 \; policy drop \; }
+nft add chain inet filter forward { type filter hook forward priority 0 \; policy drop \; }
+nft add chain inet filter output { type filter hook output priority 0 \; policy accept \; }
+
+# Allow loopback
+nft add rule inet filter input iif lo accept
+nft add rule inet filter output oif lo accept
+
+# Allow established/related connections
+nft add rule inet filter input ct state established,related accept
+nft add rule inet filter output ct state established,related accept
+
+# ICMP (ping)
+nft add rule inet filter input ip protocol icmp accept
+nft add rule inet filter output ip protocol icmp accept
+
+# DNS
+nft add rule inet filter input udp dport 53 accept
+nft add rule inet filter input tcp dport 53 accept
+nft add rule inet filter output udp dport 53 accept
+nft add rule inet filter output tcp dport 53 accept
+
+# HTTP/HTTPS
+nft add rule inet filter input tcp dport 80 accept
+nft add rule inet filter input tcp dport 443 accept
+nft add rule inet filter output tcp dport 80 accept
+nft add rule inet filter output tcp dport 443 accept
+
+# Save rules persistently
+nft list ruleset > /etc/nftables.conf
+systemctl enable nftables
+systemctl restart nftables
+
+# -----------------------------
+# 4) Disable unnecessary services
+echo -e "${GREEN}Disabling unnecessary services...${NC}"
+systemctl disable --now avahi-daemon cups bluetooth rpcbind
+
+# -----------------------------
+# 5) Remove unnecessary packages
+echo -e "${GREEN}Removing unnecessary packages...${NC}"
+apt remove -y avahi-daemon cups telnet ftp rpcbind
+apt purge -y avahi-daemon cups telnet ftp rpcbind
+apt autoremove -y
+apt autoclean -y
+
+# -----------------------------
+# 6) Configure automatic updates
+echo -e "${GREEN}Configuring automatic updates...${NC}"
+
+# Enable periodic updates
+cat <<EOF > /etc/apt/apt.conf.d/20auto-upgrades
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+EOF
+
+# Security-only upgrades
+cat <<EOF > /etc/apt/apt.conf.d/50unattended-upgrades
+Unattended-Upgrade::Allowed-Origins {
+    "Debian:stable-security";
+};
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+EOF
+
+# Enable unattended-upgrades service
+systemctl enable --now unattended-upgrades
+
+# -----------------------------
+# 7) Kernel hardening
+echo -e "${GREEN}Applying kernel hardening...${NC}"
+
+cat <<EOF > /etc/sysctl.d/99-secure-network.conf
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv6.conf.all.accept_source_route = 0
+net.ipv4.tcp_syncookies = 1
+net.ipv4.conf.all.rp_filter = 1
+EOF
+
+sysctl --system
+
+# -----------------------------
+# Finished
+echo -e "${GREEN}Security hardening completed successfully!${NC}"
+echo -e "${GREEN}Firewall is active (INPUT/FORWARD = DROP, OUTPUT = ACCEPT)${NC}"
+echo -e "${GREEN}HTTP/HTTPS and DNS are allowed, apt update will work.${NC}"
+echo -e "${GREEN}Reboot recommended to ensure all changes take effect.${NC}"

@@ -1,0 +1,29 @@
+#!/bin/bash
+
+# Update the package list
+apt update
+apt upgrade -y
+
+# Install the LXQt Core desktop
+apt install -y lxqt-core
+
+# Install the LightDM display manager
+apt install -y lightdm
+
+# Set LightDM as the default display manager, if prompted
+# (if not prompted, you can set it manually later)
+
+# Set the graphical target as the default
+systemctl set-default graphical.target
+
+# Enable LightDM to start on boot
+systemctl enable lightdm
+
+# Install Firefox ESR (Extended Support Release, secure and stable)
+apt install -y firefox-esr
+
+# Inform the user that the configuration is complete
+echo "Configuration complete. Please restart the system to start in the graphical environment."
+
+# Restart the system (uncomment the line below to restart automatically)
+reboot

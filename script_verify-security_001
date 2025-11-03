@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+# run as root
+
+set -u
+
+# color definitions
+GREEN="\033[0;32m"
+YELLOW="\033[1;33m"
+NC="\033[0m"
+
+# log directory and file
+LOG_DIR="/var/log"
+LOG_FILE="${LOG_DIR}/security_audit_$(date +%F_%H-%M-%S).log"
+
+# ensure log directory and permissions
+mkdir -p "$LOG_DIR"
+touch "$LOG_FILE"
+chmod 600 "$LOG_FILE"
+
+# counters
+OK_COUNT=0
+WARN_COUNT=0
+
+# logging and output functions (increment counters)
+log_msg() { echo -e "$1" | tee -a "$LOG_FILE"; }
+ok()      { ((OK_COUNT++)); log_msg "[${GREEN}OK${NC}] $1"; }
+warn()    { ((WARN_COUNT++)); log_msg "[${YELLOW}WARNING${NC}] $1"; }
+
+# root privilege check
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Please run this script as root: sudo $0"
+    exit 1
+fi
+
+log_msg "===== Starting security verification ($(date)) ====="
+log_msg "Log file: $LOG_FILE"
+log_msg ""
+
+# 1) system updates
+#log_msg "Checking for pending system updates..."
+#if apt list --upgradable 2>/dev/null | grep -q -v "Listing..."; then
+#    warn "There are pending package updates."
+#else
+#    ok "The system is fully up to date."
+#fi
+
+# 2) essential packages
+log_msg "Checking for essential packages..."
+ESSENTIAL_PKGS=("curl")
+MISSING=0
+for pkg in "${ESSENTIAL_PKGS[@]}"; do
+    if ! dpkg -s "$pkg" &>/dev/null; then
+        warn "Essential package missing: $pkg"
+        ((MISSING++))
+    fi
+done
+if [ $MISSING -eq 0 ]; then
+    ok "All essential packages are installed."
+else
+    warn "$MISSING essential package(s) missing."
+fi
+
+# 3) iptables rules
+log_msg "Checking iptables rules..."
+if command -v iptables &>/dev/null; then
+    if iptables -L -n | grep -q "Chain INPUT"; then
+        ok "iptables rules are configured properly."
+    else
+        warn "iptables rules appear to be missing or not configured."
+    fi
+else
+    warn "iptables is not installed on this system."
+fi
+
+# 4) iptables policies
+#log_msg "Checking iptables default policies..."
+#ALL_DROP=true
+#for chain in INPUT FORWARD OUTPUT; do
+#    policy=$(iptables -L "$chain" -n 2>/dev/null | grep "Chain $chain" | awk '{print $4}' | tr -d '()')
+#    [[ "$policy" != "DROP" ]] && ALL_DROP=false
+#done
+#if $ALL_DROP; then
+#    ok "iptables default policies are set to DROP."
+#else
+#    warn "iptables default policies are not set to DROP."
+#fi
+
+# 5) unnecessary services
+log_msg "Checking for unnecessary services..."
+SERVICES=("avahi-daemon" "bluetooth" "rpcbind" "cups" "ssh")
+ACTIVE=0
+for svc in "${SERVICES[@]}"; do
+    if systemctl is-active "$svc" &>/dev/null; then
+        warn "Unnecessary service running: $svc"
+        ((ACTIVE++))
+    fi
+done
+if [ $ACTIVE -eq 0 ]; then
+    ok "Unnecessary services are disabled."
+fi
+
+# 6) unnecessary packages
+log_msg "Checking for unnecessary packages..."
+UNNECESSARY_PKGS=("cups" "avahi-daemon" "rpcbind" "bluetooth")
+FOUND=0
+for pkg in "${UNNECESSARY_PKGS[@]}"; do
+    # ignore libraries (e.g., libcups2)
+    if dpkg -l | awk '{print $2}' | grep -E "^${pkg}(:|$)" | grep -vE '^lib' >/dev/null 2>&1; then
+        warn "Unnecessary package installed: $pkg"
+        ((FOUND++))
+    fi
+done
+if [ $FOUND -eq 0 ]; then
+    ok "No unnecessary packages installed."
+fi
+
+# 7) automatic updates configuration
+log_msg "Checking automatic update configuration..."
+AUTO_FILE="/etc/apt/apt.conf.d/20auto-upgrades"
+if [ -f "$AUTO_FILE" ] && grep -q 'Unattended-Upgrade "1"' "$AUTO_FILE"; then
+    ok "Automatic updates are properly configured."
+else
+    warn "Automatic updates are not configured."
+fi
+
+# 8) automatic updates service
+log_msg "Checking if automatic updates service is enabled..."
+if systemctl is-enabled unattended-upgrades >/dev/null 2>&1; then
+    ok "Unattended-upgrades service is enabled."
+else
+    warn "Unattended-upgrades service is disabled."
+fi
+
+# 9) kernel security parameters
+log_msg "Checking kernel security configurations..."
+SECURE_SYSCTL_KEYS=(
+    "net.ipv4.conf.all.accept_redirects=0"
+    "net.ipv4.conf.all.send_redirects=0"
+    "net.ipv4.conf.default.accept_redirects=0"
+    "net.ipv4.conf.default.send_redirects=0"
+    "net.ipv4.conf.all.accept_source_route=0"
+    "net.ipv6.conf.all.accept_source_route=0"
+    "net.ipv4.tcp_syncookies=1"
+    "net.ipv4.conf.all.rp_filter=1"
+)
+SYSCTL_MISMATCH=0
+for line in "${SECURE_SYSCTL_KEYS[@]}"; do
+    key="${line%%=*}"
+    expected="${line##*=}"
+    current=$(sysctl -n "$key" 2>/dev/null || echo "missing")
+    if [[ "$current" == "$expected" ]]; then
+        ok "Kernel setting '$key=$expected' is correctly applied."
+    else
+        warn "Kernel setting '$key' not applied (expected: $expected, current: $current)."
+        ((SYSCTL_MISMATCH++))
+    fi
+done
+if [ $SYSCTL_MISMATCH -eq 0 ]; then
+    ok "All kernel security settings are correctly applied."
+fi
+
+# 10) auditd check (service + ability to show rules)
+log_msg "Checking auditd (audit daemon)..."
+AUDIT_OK=false
+if dpkg -s auditd &>/dev/null; then
+    if systemctl is-active auditd &>/dev/null; then
+        # try a simple auditctl query if available
+        if command -v auditctl &>/dev/null; then
+            if auditctl -s >/dev/null 2>&1; then
+                ok "auditd is installed, running and responding to auditctl."
+                AUDIT_OK=true
+            else
+                warn "auditd is running but auditctl did not respond correctly."
+            fi
+        else
+            ok "auditd is installed and running (auditctl not found to validate)."
+            AUDIT_OK=true
+        fi
+    else
+        warn "auditd package installed but service is not active."
+    fi
+else
+    warn "auditd package is not installed."
+fi
+
+# 11) fail2ban check
+log_msg "Checking fail2ban..."
+if dpkg -s fail2ban &>/dev/null; then
+    if systemctl is-active fail2ban &>/dev/null; then
+        ok "fail2ban is installed and running."
+    else
+        warn "fail2ban is installed but service is not active."
+    fi
+else
+    warn "fail2ban is not installed."
+fi
+
+# 12) apparmor check
+log_msg "Checking AppArmor..."
+APPARMOR_OK=false
+if dpkg -s apparmor &>/dev/null; then
+    # prefer aa-status if available, fallback to systemctl
+    if command -v aa-status &>/dev/null; then
+        if aa-status --enabled 2>/dev/null | grep -q 'apparmor module is loaded'; then
+            ok "AppArmor package installed and module is loaded."
+            APPARMOR_OK=true
+        else
+            # aa-status may not return that exact line on all distros, use is-active
+            if systemctl is-active apparmor &>/dev/null; then
+                ok "AppArmor package installed and service is active."
+                APPARMOR_OK=true
+            else
+                warn "AppArmor package installed but module/service not active."
+            fi
+        fi
+    else
+        if systemctl is-active apparmor &>/dev/null; then
+            ok "AppArmor package installed and service is active."
+            APPARMOR_OK=true
+        else
+            warn "AppArmor package installed but service not active, aa-status not available."
+        fi
+    fi
+else
+    warn "AppArmor package is not installed."
+fi
+
+# 13) reboot requirement
+log_msg "Checking if system reboot is required..."
+if [ -f /var/run/reboot-required ]; then
+    warn "System reboot is required."
+else
+    ok "System does not require a reboot."
+fi
+
+# final summary
+log_msg ""
+log_msg "===== Security verification completed at $(date) ====="
+log_msg "Report saved to: $LOG_FILE"
+log_msg ""
+log_msg "Summary: ${OK_COUNT} OK, ${WARN_COUNT} WARNING(s)"

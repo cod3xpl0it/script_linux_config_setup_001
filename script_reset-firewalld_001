@@ -1,0 +1,85 @@
+#!/bin/bash
+# Reset firewalld, iptables, ip6tables, and nftables to default
+# Must be run as root
+
+echo "======================================="
+echo " Resetting firewalld, iptables, and nftables..."
+echo "======================================="
+
+#---------------------------------------
+# Check firewalld
+#---------------------------------------
+if [ -x /sbin/firewall-cmd ]; then
+  echo "Stopping firewalld..."
+  /sbin/systemctl stop firewalld
+
+  echo "Removing firewalld configuration files..."
+  rm -rf /etc/firewalld
+
+  echo "Starting firewalld..."
+  /sbin/systemctl start firewalld
+
+  echo "Reloading firewalld..."
+  /sbin/firewall-cmd --reload > /dev/null 2>&1
+
+  echo "Current firewalld configuration:"
+  /sbin/firewall-cmd --list-all
+else
+  echo "Warning: firewalld not found, skipping..."
+fi
+
+#---------------------------------------
+# Reset iptables (IPv4)
+#---------------------------------------
+if [ -x /sbin/iptables ]; then
+  echo "Resetting iptables rules (IPv4)..."
+  /sbin/iptables -F
+  /sbin/iptables -X
+  /sbin/iptables -Z
+  /sbin/iptables -P INPUT ACCEPT
+  /sbin/iptables -P FORWARD ACCEPT
+  /sbin/iptables -P OUTPUT ACCEPT
+else
+  echo "Warning: iptables not found, skipping..."
+fi
+
+#---------------------------------------
+# Reset ip6tables (IPv6)
+#---------------------------------------
+if [ -x /sbin/ip6tables ]; then
+  echo "Resetting ip6tables rules (IPv6)..."
+  /sbin/ip6tables -F
+  /sbin/ip6tables -X
+  /sbin/ip6tables -Z
+  /sbin/ip6tables -P INPUT ACCEPT
+  /sbin/ip6tables -P FORWARD ACCEPT
+  /sbin/ip6tables -P OUTPUT ACCEPT
+else
+  echo "Warning: ip6tables not found, skipping..."
+fi
+
+#---------------------------------------
+# Reset nftables
+#---------------------------------------
+if [ -x /sbin/nft ]; then
+  echo "Enabling and starting nftables..."
+  /sbin/systemctl enable --now nftables
+
+  echo "Flushing nftables ruleset..."
+  /sbin/nft flush ruleset
+else
+  echo "Warning: nftables not found, skipping..."
+fi
+
+#---------------------------------------
+# Optional: Save the reset state (if supported)
+#---------------------------------------
+if [ -x /sbin/netfilter-persistent ]; then
+  echo "Saving current firewall state..."
+  /sbin/netfilter-persistent save
+fi
+
+echo "======================================="
+echo " Firewall reset complete!"
+echo " firewalld, iptables, ip6tables, and nftables restored to defaults."
+echo "======================================="

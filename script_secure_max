@@ -1,0 +1,228 @@
+#!/bin/bash
+# script_secure_max_001 — Maximum Linux security hardening for Debian/Ubuntu
+# Run as root
+
+set -euo pipefail
+
+echo "===== Starting maximum system security hardening ====="
+
+# ----------------------------
+# 1) Update system
+# ----------------------------
+echo "[1/10] Updating the system..."
+apt update -y
+apt upgrade -y
+apt dist-upgrade -y
+
+# ----------------------------
+# 2) Install essential packages
+# ----------------------------
+echo "[2/10] Installing essential security packages..."
+apt install -y sudo wget curl bash-completion iptables-persistent netfilter-persistent \
+auditd fail2ban apparmor apparmor-utils nftables net-tools iproute2 nmap unattended-upgrades
+
+
+set -e
+
+echo "=== Stopping AppArmor ==="
+# Stop the AppArmor service before making changes
+systemctl stop apparmor
+
+echo "=== Removing all loaded profiles ==="
+# Remove all currently loaded profiles
+/sbin/apparmor_parser -R /etc/apparmor.d/* || true
+
+echo "=== Reinstalling AppArmor packages ==="
+# Reinstall the AppArmor packages to restore default profiles
+apt update
+apt install --reinstall -y apparmor apparmor-profiles apparmor-utils
+
+echo "=== Reloading default profiles ==="
+# Start the AppArmor service and reload default profiles
+systemctl start apparmor
+/sbin/apparmor_parser -r /etc/apparmor.d/* || true
+
+echo "=== Checking AppArmor status ==="
+# Display the current status of AppArmor and loaded profiles
+/sbin/apparmor_status
+
+echo "=== Reset complete! ==="
+
+
+# ----------------------------
+# 3) Configure firewall (iptables)
+# ----------------------------
+echo "[3/10] Configuring firewall..."
+# Flush old rules
+/sbin/iptables -F
+/sbin/iptables -X
+/sbin/iptables -t nat -F
+/sbin/iptables -t mangle -F
+/sbin/iptables -t raw -F
+
+# Set default policies
+/sbin/iptables -P INPUT DROP
+/sbin/iptables -P FORWARD DROP
+/sbin/iptables -P OUTPUT ACCEPT
+
+# Allow loopback
+/sbin/iptables -A INPUT -i lo -j ACCEPT
+/sbin/iptables -A OUTPUT -o lo -j ACCEPT
+
+# Allow established connections
+/sbin/iptables -A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
+/sbin/iptables -A OUTPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
+
+# Allow essential services
+/sbin/iptables -A INPUT -p udp --dport 53 -j ACCEPT   # DNS
+/sbin/iptables -A INPUT -p tcp --dport 53 -j ACCEPT
+/sbin/iptables -A INPUT -p tcp --dport 80 -j ACCEPT   # HTTP
+/sbin/iptables -A INPUT -p tcp --dport 443 -j ACCEPT  # HTTPS
+/sbin/iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+/sbin/iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
+/sbin/iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
+/sbin/iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+
+# Save rules permanently
+/sbin/netfilter-persistent save
+/sbin/netfilter-persistent reload
+
+# ----------------------------
+# 4) Disable unnecessary services
+# ----------------------------
+echo "[4/10] Disabling unnecessary services..."
+for svc in avahi-daemon cups bluetooth rpcbind; do
+    systemctl disable --now $svc || true
+done
+
+# ----------------------------
+# 5) Configure automatic updates
+# ----------------------------
+echo "[5/10] Configuring unattended-upgrades..."
+cat <<EOF > /etc/apt/apt.conf.d/20auto-upgrades
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+EOF
+
+cat <<EOF > /etc/apt/apt.conf.d/50unattended-upgrades
+Unattended-Upgrade::Allowed-Origins {
+    "Debian:stable-security";
+};
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+EOF
+
+systemctl enable --now unattended-upgrades
+
+# ----------------------------
+# 6) Kernel hardening
+# ----------------------------
+echo "[6/10] Applying kernel hardening..."
+cat <<EOF > /etc/sysctl.d/99-secure-network.conf
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv6.conf.all.accept_source_route = 0
+net.ipv4.tcp_syncookies = 1
+net.ipv4.conf.all.rp_filter = 1
+EOF
+
+/sbin/sysctl --system
+
+# ----------------------------
+# 7) Configure auditd
+# ----------------------------
+echo "[7/10] Configuring auditd rules..."
+cat <<EOF > /etc/audit/rules.d/hardening.rules
+# Monitor critical files
+-w /etc/passwd -p wa -k passwd_changes
+-w /etc/shadow -p wa -k shadow_changes
+-w /etc/group -p wa -k group_changes
+-w /etc/sudoers -p wa -k sudoers_changes
+-w /etc/ssh/sshd_config -p wa -k ssh_config_changes
+-w /var/log/ -p wa -k log_changes
+
+# Monitor critical binaries
+-w /usr/bin/sudo -p x -k sudo_exec
+-w /usr/bin/passwd -p x -k passwd_exec
+
+# Monitor kernel module changes
+-w /sbin/insmod -p x -k kernel_module
+-w /sbin/rmmod -p x -k kernel_module
+EOF
+
+systemctl restart auditd
+
+# ----------------------------
+# 8) Configure Fail2Ban for multiple services
+# ----------------------------
+echo "[8/10] Configuring Fail2Ban..."
+cat <<EOF > /etc/fail2ban/jail.local
+[DEFAULT]
+bantime  = 1h
+findtime = 10m
+maxretry = 3
+ignoreip = 127.0.0.1/8 ::1
+
+[sshd]
+enabled = true
+
+[nginx-http-auth]
+enabled = true
+port    = http,https
+logpath = /var/log/nginx/*error.log
+
+[apache-auth]
+enabled = true
+port    = http,https
+logpath = /var/log/apache*/*error.log
+
+[vsftpd]
+enabled = true
+port    = ftp
+logpath = /var/log/vsftpd.log
+
+[proftpd]
+enabled = true
+port    = ftp
+logpath = /var/log/proftpd/proftpd.log
+
+[postfix]
+enabled = true
+port    = smtp,ssmtp
+logpath = /var/log/mail.log
+
+[dovecot]
+enabled = true
+port    = pop3,pop3s,imap,imaps
+logpath = /var/log/mail.log
+
+[mysqld-auth]
+enabled = true
+port    = 3306
+logpath = /var/log/mysql/error.log
+
+[samba]
+enabled = true
+logpath = /var/log/samba/log.*
+banaction = iptables-multiport
+EOF
+
+systemctl restart fail2ban
+
+# ----------------------------
+# 9) Configure AppArmor
+# ----------------------------
+echo "[9/10] Configuring AppArmor..."
+for profile in /etc/apparmor.d/*; do
+    /sbin/aa-enforce "$profile" || true
+done
+systemctl restart apparmor
+
+# ----------------------------
+# 10) Final message
+# ----------------------------
+echo "[10/10] Hardening complete. System reboot recommended."
+echo "Firewall, auditd, Fail2Ban, AppArmor, automatic updates and kernel hardening applied."
