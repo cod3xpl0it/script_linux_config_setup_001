@@ -2,6 +2,8 @@
 # Run as root - Ultra-secure hardening for Debian minimal (NO REMOTE ACCESS) - Fail2ban FIXED + DNS RESTRICTED + APT JAIL + AUTO-REBOOT
 set -euo pipefail
 
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 # -----------------------------
 # IPv6 OPTIONAL: uncomment to ENABLE secure IPv6 (Google DNS + HTTP/HTTPS only)
 ENABLE_IPV6=false
