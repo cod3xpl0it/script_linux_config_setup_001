@@ -1,0 +1,34 @@
+#!/bin/bash
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+# Update packages
+apt update
+apt upgrade -y
+
+# Install LXQt core desktop
+apt install -y lxqt-core
+
+# Install SDDM (first/only DM in minimal install = default)
+apt install -y sddm
+systemctl enable sddm
+
+# Set graphical target
+systemctl set-default graphical.target
+
+# Install Firefox ESR
+apt install -y firefox-esr
+
+# Cleanup
+apt autoremove -y
+apt autoclean
+
+echo "Installation complete! Unattended-upgrades remains active."
+read -p "Reboot now for graphical environment? (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo "Rebooting..."
+    reboot
+else
+    echo "OK. Run 'reboot' manually when ready."
+fi
