@@ -10,7 +10,8 @@ apt upgrade -y
 apt install -y lxqt-core
 
 # Install the LightDM display manager
-apt install -y lightdm
+#apt install -y lightdm
+apt install -y sddm
 
 # Set LightDM as the default display manager, if prompted
 # (if not prompted, you can set it manually later)
@@ -19,7 +20,9 @@ apt install -y lightdm
 systemctl set-default graphical.target
 
 # Enable LightDM to start on boot
-systemctl enable lightdm
+#systemctl enable lightdm
+#dpkg-reconfigure sddm
+systemctl enable sddm
 
 # Install Firefox ESR (Extended Support Release, secure and stable)
 apt install -y firefox-esr
